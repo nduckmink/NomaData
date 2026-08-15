@@ -6,14 +6,16 @@ NomaData is an AI-native, model-agnostic client for conversational Business Inte
 
 This roadmap describes the planned development path from the initial technical foundation to a production-ready AI data workspace.
 
-> **Progress (2026-08-15):** Phase 0 — Foundation ✅ **complete**. The end-to-end
-> skeleton boots (web → API health), the five core interfaces exist, dev runs
-> via `pnpm` scripts (infra in Docker, apps on watch), and architecture
-> boundaries are enforced by import-linter. See
-> [docs/M0-FOUNDATION.md](docs/M0-FOUNDATION.md) and
-> [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
+> **Progress (2026-08-15):**
+> - Phase 0 — Foundation ✅ **complete**. Skeleton boots (web → API health), five
+>   core interfaces, `pnpm` dev scripts, boundaries enforced by import-linter.
+> - Phase 1 — Data Connectivity 🚧 **in progress**. **MySQL** connector done:
+>   connect, schema introspection (tables/columns/PK/FK), column profiling, plus
+>   a `/schema` explorer UI — verified against the real SCP DB (124 tables /
+>   1687 columns / 187 FKs). **Target adapted from PostgreSQL → MySQL + SQL
+>   Server**, matching the actual data on hand (`test/infra`).
 >
-> **Current focus → Phase 1 (Data Connectivity): the PostgreSQL connector.**
+> **Current focus → Phase 1: the SQL Server connector (second engine).**
 
 ---
 
@@ -140,24 +142,24 @@ Visualization        ✓
 
 ---
 
-# Phase 1 — Data Connectivity
+# Phase 1 — Data Connectivity 🚧
 
 ## Objective
 
 Connect NomaData to a real database and build the foundation for schema discovery.
 
-Initial database target:
+Database targets (adapted to the data on hand — see `test/infra`):
 
-> **PostgreSQL**
+> **MySQL ✅ · SQL Server (next) · PostgreSQL (later)**
 
 ## 1.1 Database Connection
 
-* [ ] Create data source configuration
-* [ ] Store connection metadata securely
-* [ ] Implement PostgreSQL connector
-* [ ] Implement connection testing
-* [ ] Implement connection lifecycle
-* [ ] Implement connection error handling
+* [x] Create data source configuration (env-driven; encrypted storage in Phase 6)
+* [ ] Store connection metadata securely — deferred to Phase 6
+* [x] Implement MySQL connector (SQL Server next; PostgreSQL later)
+* [x] Implement connection testing
+* [x] Implement connection lifecycle (pooling + close)
+* [x] Implement connection error handling
 
 Example:
 
@@ -176,11 +178,11 @@ Data Source
 
 Discover:
 
-* [ ] Tables
-* [ ] Columns
-* [ ] Data types
-* [ ] Primary keys
-* [ ] Foreign keys
+* [x] Tables
+* [x] Columns
+* [x] Data types
+* [x] Primary keys
+* [x] Foreign keys
 * [ ] Unique constraints
 * [ ] Indexes
 * [ ] Views
@@ -205,23 +207,23 @@ Relationship
 
 Profile selected columns:
 
-* [ ] Null percentage
-* [ ] Distinct values
-* [ ] Min / max
+* [x] Null percentage
+* [x] Distinct values
+* [x] Min / max
 * [ ] Numeric distribution
-* [ ] Sample values
+* [x] Sample values
 * [ ] Date ranges
 * [ ] Potential categorical fields
 
 ## Acceptance Criteria
 
-Given a PostgreSQL database, NomaData must be able to:
+Given a supported database (MySQL today), NomaData must be able to:
 
-1. Connect to the database.
-2. Discover its schema.
-3. Display tables and columns.
-4. Display relationships.
-5. Provide basic profiling information.
+1. Connect to the database. ✅
+2. Discover its schema. ✅
+3. Display tables and columns. ✅
+4. Display relationships. ✅
+5. Provide basic profiling information. ✅
 
 ---
 
@@ -1122,9 +1124,9 @@ The immediate development priority is:
 ```text
 1. Foundation                    ✅ done
        ↓
-2. PostgreSQL Connector          ← next
+2. MySQL Connector               ✅ done  (SQL Server next)
        ↓
-3. Schema Introspection
+3. Schema Introspection          ✅ done
        ↓
 4. Semantic Model
        ↓
