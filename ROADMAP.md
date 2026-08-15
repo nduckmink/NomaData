@@ -9,13 +9,15 @@ This roadmap describes the planned development path from the initial technical f
 > **Progress (2026-08-15):**
 > - Phase 0 — Foundation ✅ **complete**. Skeleton boots (web → API health), five
 >   core interfaces, `pnpm` dev scripts, boundaries enforced by import-linter.
-> - Phase 1 — Data Connectivity 🚧 **in progress**. **MySQL** connector done:
->   connect, schema introspection (tables/columns/PK/FK), column profiling, plus
->   a `/schema` explorer UI — verified against the real SCP DB (124 tables /
->   1687 columns / 187 FKs). **Target adapted from PostgreSQL → MySQL + SQL
->   Server**, matching the actual data on hand (`test/infra`).
+> - Phase 1 — Data Connectivity 🚧. **MySQL + SQL Server** connectors done —
+>   connect, schema introspection (tables/columns/PK/FK), column profiling — both
+>   behind one `DataSource` interface, configured in `data_sources.json`, with a
+>   `/schema` explorer + source switcher. **Target adapted from PostgreSQL →
+>   MySQL + SQL Server** (the real data in `test/infra`). Verified live: MySQL
+>   124 tables / 1687 cols / 187 FKs; SQL Server 196 tables / 3040 cols / 12 FKs.
 >
-> **Current focus → Phase 1: the SQL Server connector (second engine).**
+> **Current focus → Phase 2 (Semantic Intelligence): turn the schema into a
+> business semantic model.**
 
 ---
 
@@ -150,13 +152,13 @@ Connect NomaData to a real database and build the foundation for schema discover
 
 Database targets (adapted to the data on hand — see `test/infra`):
 
-> **MySQL ✅ · SQL Server (next) · PostgreSQL (later)**
+> **MySQL ✅ · SQL Server ✅ · PostgreSQL (later)**
 
 ## 1.1 Database Connection
 
-* [x] Create data source configuration (env-driven; encrypted storage in Phase 6)
+* [x] Create data source configuration (data_sources.json; encrypted storage in Phase 6)
 * [ ] Store connection metadata securely — deferred to Phase 6
-* [x] Implement MySQL connector (SQL Server next; PostgreSQL later)
+* [x] Implement MySQL + SQL Server connectors (PostgreSQL later)
 * [x] Implement connection testing
 * [x] Implement connection lifecycle (pooling + close)
 * [x] Implement connection error handling
@@ -1124,7 +1126,7 @@ The immediate development priority is:
 ```text
 1. Foundation                    ✅ done
        ↓
-2. MySQL Connector               ✅ done  (SQL Server next)
+2. MySQL + SQL Server Connectors  ✅ done
        ↓
 3. Schema Introspection          ✅ done
        ↓
