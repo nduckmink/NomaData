@@ -8,3 +8,5 @@ real ``data_sources.json`` never leaks into the test run. Must run before
 import os
 
 os.environ["NOMADATA_DATA_SOURCES_FILE"] = "__no_data_sources_for_tests__.json"
+# Keep tests hermetic: no data sources and no app DB connection.
+os.environ["NOMADATA_DATABASE_URL"] = ""

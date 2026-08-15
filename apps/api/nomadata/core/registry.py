@@ -14,10 +14,12 @@ from nomadata.core.errors import (
     DataSourceNotFoundError,
     ProviderNotFoundError,
     QueryEngineNotConfiguredError,
+    SemanticModelNotConfiguredError,
 )
 from nomadata.core.interfaces.ai_provider import AIProvider
 from nomadata.core.interfaces.data_source import DataSource
 from nomadata.core.interfaces.query_engine import QueryEngine
+from nomadata.core.interfaces.semantic_model import SemanticModel
 
 
 class Registry:
@@ -25,6 +27,7 @@ class Registry:
         self._providers: dict[str, AIProvider] = {}
         self._data_sources: dict[str, DataSource] = {}
         self._query_engine: QueryEngine | None = None
+        self._semantic_model: SemanticModel | None = None
 
     # ---- AI providers ----
     def register_provider(self, name: str, provider: AIProvider) -> None:
@@ -60,6 +63,17 @@ class Registry:
         if self._query_engine is None:
             raise QueryEngineNotConfiguredError("No query engine configured.")
         return self._query_engine
+
+    # ---- Semantic model ----
+    def set_semantic_model(self, model: SemanticModel) -> None:
+        self._semantic_model = model
+
+    def get_semantic_model(self) -> SemanticModel:
+        if self._semantic_model is None:
+            raise SemanticModelNotConfiguredError(
+                "Semantic model unavailable — the app database is not connected."
+            )
+        return self._semantic_model
 
 
 _registry = Registry()

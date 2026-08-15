@@ -236,6 +236,12 @@ class PublishResult(BaseModel):
     published: bool
 
 
+class SemanticModelVersion(BaseModel):
+    version: int
+    status: str  # "draft" | "published"
+    created_at: str
+
+
 # ======================================================================
 # Visualization boundary
 # ======================================================================

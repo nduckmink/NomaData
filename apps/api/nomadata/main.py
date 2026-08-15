@@ -20,6 +20,9 @@ from nomadata.core.interfaces.data_source import DataSource
 from nomadata.core.registry import get_registry
 from nomadata.data_sources import load_data_sources
 from nomadata.logging import configure_logging, get_logger
+from nomadata.semantic.service import SemanticModelService
+from nomadata.storage.database import Database
+from nomadata.storage.semantic_repo import SemanticRepository
 
 
 @asynccontextmanager
@@ -46,8 +49,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sources.append(source)
         log.info("nomadata.datasource.registered", name=source.name, kind=cfg.kind)
 
+    # M2: connect the app metadata DB and register the semantic model service.
+    # Degrade gracefully if the app DB is unavailable — the rest of the API runs.
+    database: Database | None = None
+    if settings.database_url:
+        database = Database(settings.database_url)
+        try:
+            await database.connect()
+            registry.set_semantic_model(SemanticModelService(SemanticRepository(database)))
+            log.info("nomadata.appdb.connected")
+        except Exception as exc:  # noqa: BLE001 - degrade, don't crash the API
+            log.warning("nomadata.appdb.unavailable", error=str(exc))
+            database = None
+
     yield
 
+    if database is not None:
+        await database.close()
     for source in sources:
         close = getattr(source, "close", None)
         if close is not None:

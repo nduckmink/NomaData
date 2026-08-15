@@ -31,5 +31,9 @@ class QueryEngineNotConfiguredError(NomaDataError):
     """No query engine has been configured."""
 
 
+class SemanticModelNotConfiguredError(NomaDataError):
+    """The semantic model service is not available (app DB not connected)."""
+
+
 class DataConnectionError(NomaDataError):
     """A data source failed to connect or respond."""
