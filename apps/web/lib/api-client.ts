@@ -71,25 +71,59 @@ export interface DataSourceInfo {
   uses_password_env: boolean
 }
 
+export async function getDataSource(name: string): Promise<DataSourceInfo> {
+  return getJSON<DataSourceInfo>(
+    `/api/v1/datasources/${encodeURIComponent(name)}`
+  )
+}
+
 export async function createDataSource(
   input: DataSourceInput
 ): Promise<DataSourceInfo> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/datasources`, {
-    method: "POST",
+  return sendDataSource("POST", "/api/v1/datasources", input)
+}
+
+export async function updateDataSource(
+  name: string,
+  input: DataSourceInput
+): Promise<DataSourceInfo> {
+  return sendDataSource(
+    "PUT",
+    `/api/v1/datasources/${encodeURIComponent(name)}`,
+    input
+  )
+}
+
+export async function deleteDataSource(name: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}`,
+    { method: "DELETE" }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+async function sendDataSource(
+  method: "POST" | "PUT",
+  path: string,
+  input: DataSourceInput
+): Promise<DataSourceInfo> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   })
-  if (!res.ok) {
-    let detail = `API returned ${res.status}`
-    try {
-      const body = (await res.json()) as { detail?: string }
-      if (body?.detail) detail = body.detail
-    } catch {
-      // keep the status-based message
-    }
-    throw new Error(detail)
-  }
+  if (!res.ok) throw new Error(await errorDetail(res))
   return (await res.json()) as DataSourceInfo
+}
+
+async function errorDetail(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { detail?: string }
+    if (body?.detail) return body.detail
+  } catch {
+    // fall through to status-based message
+  }
+  return `API returned ${res.status}`
 }
 
 export async function getSchema(

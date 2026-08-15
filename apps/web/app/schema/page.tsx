@@ -3,8 +3,11 @@
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
+  RiAddLine,
   RiArrowRightLine,
   RiDatabase2Line,
+  RiDeleteBinLine,
+  RiEditLine,
   RiErrorWarningLine,
   RiKey2Line,
   RiLinksLine,
@@ -20,6 +23,7 @@ import {
 } from "@/lib/api-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -36,7 +40,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { cn } from "@/lib/utils"
 
-import { AddDataSourceDialog } from "./add-data-source"
+import { DataSourceDialog, DeleteDataSourceDialog } from "./data-source-dialogs"
 import { TableErd } from "./erd"
 
 type Status = "loading" | "error" | "empty" | "ready"
@@ -155,8 +159,48 @@ export default function SchemaPage() {
                 ))}
               </ToggleGroup>
             )}
-            <AddDataSourceDialog
-              onCreated={(name) => void refreshSources(name)}
+            {source && (
+              <>
+                <DataSourceDialog
+                  mode="edit"
+                  name={source}
+                  onSaved={(name) => void refreshSources(name)}
+                  trigger={
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      aria-label={`Edit ${source}`}
+                      title="Edit source"
+                    >
+                      <RiEditLine />
+                    </Button>
+                  }
+                />
+                <DeleteDataSourceDialog
+                  name={source}
+                  onDeleted={() => void refreshSources()}
+                  trigger={
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      aria-label={`Remove ${source}`}
+                      title="Remove source"
+                    >
+                      <RiDeleteBinLine />
+                    </Button>
+                  }
+                />
+              </>
+            )}
+            <DataSourceDialog
+              mode="create"
+              onSaved={(name) => void refreshSources(name)}
+              trigger={
+                <Button variant="outline" size="sm">
+                  <RiAddLine data-icon="inline-start" />
+                  Add source
+                </Button>
+              }
             />
             <ThemeToggle />
           </div>
@@ -192,8 +236,15 @@ export default function SchemaPage() {
               Add a database connection to introspect its schema.
             </AlertDescription>
           </Alert>
-          <AddDataSourceDialog
-            onCreated={(name) => void refreshSources(name)}
+          <DataSourceDialog
+            mode="create"
+            onSaved={(name) => void refreshSources(name)}
+            trigger={
+              <Button variant="outline" size="sm">
+                <RiAddLine data-icon="inline-start" />
+                Add source
+              </Button>
+            }
           />
         </div>
       )}

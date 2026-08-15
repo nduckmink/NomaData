@@ -47,6 +47,14 @@ async def list_data_sources() -> list[str]:
     return get_registry().data_source_names()
 
 
+@router.get("/{name}", response_model=DataSourceInfo)
+async def get_data_source(request: Request, name: str) -> DataSourceInfo:
+    info = await _manager(request).get_info(name)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Data source not found: {name!r}")
+    return info
+
+
 @router.post("", response_model=DataSourceInfo, status_code=201)
 async def create_data_source(request: Request, config: DataSourceConfig) -> DataSourceInfo:
     try:

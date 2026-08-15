@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from nomadata.connectors import build_data_source
 from nomadata.core.interfaces.data_source import DataSource
-from nomadata.core.models import DataSourceConfig
+from nomadata.core.models import DataSourceConfig, DataSourceInfo
 from nomadata.core.registry import Registry
 from nomadata.storage.data_source_repo import DataSourceRepository
 
@@ -37,6 +37,10 @@ class DataSourceManager:
             self._registry.register_data_source(cfg.name, self._build(cfg))
         return len(configs)
 
+    async def get_info(self, name: str) -> DataSourceInfo | None:
+        cfg = await self._repo.get(name)
+        return cfg.to_info() if cfg else None
+
     async def create(self, cfg: DataSourceConfig) -> DataSourceConfig:
         await self._repo.create(cfg)  # raises DataSourceExistsError on conflict
         self._registry.register_data_source(cfg.name, self._build(cfg))
@@ -44,6 +48,16 @@ class DataSourceManager:
 
     async def update(self, name: str, cfg: DataSourceConfig) -> bool:
         cfg = cfg.model_copy(update={"name": name})
+        # Preserve the stored secret when the edit form leaves the password blank.
+        if not cfg.password and not cfg.password_env:
+            existing = await self._repo.get(name)
+            if existing is not None:
+                cfg = cfg.model_copy(
+                    update={
+                        "password": existing.password,
+                        "password_env": existing.password_env,
+                    }
+                )
         updated = await self._repo.update(cfg)
         if not updated:
             return False
