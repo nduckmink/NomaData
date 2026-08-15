@@ -139,7 +139,8 @@ contracts updated accordingly.
 
 ## 6. Acceptance criteria (Phase 2)
 
-- [ ] NomaData identifies potential entities, dimensions, measures, relationships, metrics
+- [x] NomaData identifies potential entities, dimensions, measures, relationships, metrics
+      — M2.2 `POST …/semantic/suggest` (heuristic baseline + optional AI enrichment)
 - [ ] A human can review, modify, accept/reject suggestions
 - [ ] A semantic model can be published and reloaded (persisted in Postgres, versioned)
 - [ ] Cube executes queries against the published semantic model

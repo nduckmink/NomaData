@@ -1,15 +1,13 @@
 "use client"
 
-import Image from "next/image"
 import Link from "next/link"
 import { useCallback, useEffect, useState } from "react"
 import {
-  type RemixiconComponentType,
+  RiArrowRightLine,
   RiBrainLine,
-  RiCheckboxCircleFill,
+  RiCheckboxCircleLine,
   RiCloseCircleLine,
   RiDatabase2Line,
-  RiPulseLine,
   RiRefreshLine,
   RiServerLine,
 } from "@remixicon/react"
@@ -22,12 +20,11 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ThemeToggle } from "@/components/theme-toggle"
+import { PageContainer, PageHeader } from "@/components/page-header"
 import { cn } from "@/lib/utils"
 
 type LoadState = "loading" | "ok" | "error"
@@ -70,98 +67,18 @@ export default function Page() {
     return () => controller.abort()
   }, [])
 
+  const sources = health?.data_sources ?? []
+  const providers = health?.providers ?? []
+
   return (
-    <main className="flex min-h-svh items-center justify-center bg-background p-6">
-      <div className="flex w-full max-w-lg flex-col gap-6">
-        <header className="flex flex-col gap-1">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              {/* Transparent variant: the orange mark reads on both themes. */}
-              <Image
-                src="/logo-transparent.svg"
-                alt=""
-                width={32}
-                height={32}
-                className="size-8"
-              />
-              <span className="text-2xl font-semibold tracking-tight">
-                NomaData
-              </span>
-              <Badge variant="outline">v{health?.version ?? "0.0.1"}</Badge>
-            </div>
-            <ThemeToggle />
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Know My Data. — Foundation skeleton (M0)
-          </p>
-        </header>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex flex-col gap-1.5">
-                <CardTitle>System Status</CardTitle>
-                <CardDescription>
-                  Live check of the NomaData API and its registries.
-                </CardDescription>
-              </div>
-              <StatusBadge state={state} status={health?.status} />
-            </div>
-          </CardHeader>
-
-          <CardContent className="flex flex-col gap-3">
-            {state === "loading" && <LoadingRows />}
-
-            {state === "error" && (
-              <Alert variant="destructive">
-                <RiCloseCircleLine />
-                <AlertTitle>API unreachable</AlertTitle>
-                <AlertDescription>
-                  Could not reach the API at {API_BASE_URL}. Start it with{" "}
-                  <code className="font-mono">pnpm api:dev</code>.
-                </AlertDescription>
-              </Alert>
-            )}
-
-            {state === "ok" && health && (
-              <div className="flex flex-col divide-y divide-border">
-                <StatusRow
-                  icon={RiServerLine}
-                  label="API"
-                  value={health.checks.api ?? "unknown"}
-                />
-                <StatusRow
-                  icon={RiPulseLine}
-                  label="Environment"
-                  value={health.env}
-                />
-                <StatusRow
-                  icon={RiBrainLine}
-                  label="AI providers"
-                  value={
-                    health.providers.length
-                      ? health.providers.join(", ")
-                      : "none registered (M3)"
-                  }
-                  muted={health.providers.length === 0}
-                />
-                <StatusRow
-                  icon={RiDatabase2Line}
-                  label="Data sources"
-                  value={
-                    health.data_sources.length
-                      ? health.data_sources.join(", ")
-                      : "none registered (M1)"
-                  }
-                  muted={health.data_sources.length === 0}
-                />
-              </div>
-            )}
-          </CardContent>
-
-          <CardFooter className="flex items-center justify-between gap-4">
-            <span className="text-xs text-muted-foreground">
-              {checkedAt ? `Last checked ${checkedAt}` : "Checking…"}
+    <PageContainer>
+      <PageHeader
+        title="Overview"
+        description="What NomaData is connected to right now."
+        actions={
+          <>
+            <span className="hidden text-xs text-muted-foreground sm:inline">
+              {checkedAt ? `Checked ${checkedAt}` : "Checking…"}
             </span>
             <Button
               variant="outline"
@@ -175,68 +92,216 @@ export default function Page() {
               <RiRefreshLine data-icon="inline-start" />
               Refresh
             </Button>
-          </CardFooter>
+          </>
+        }
+      />
+
+      {state === "error" && (
+        <Alert variant="destructive">
+          <RiCloseCircleLine />
+          <AlertTitle>API unreachable</AlertTitle>
+          <AlertDescription>
+            Could not reach the API at <code>{API_BASE_URL}</code>. Start it
+            with <code>pnpm api:dev</code>.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <Card className="bg-panel">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <RiServerLine className="size-4 text-muted-foreground" />
+              API
+            </CardTitle>
+            <CardDescription>Backend service and environment.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {state === "loading" ? (
+              <SkeletonRows rows={3} />
+            ) : (
+              <dl className="flex flex-col divide-y divide-border">
+                <Row
+                  label="Status"
+                  value={state === "ok" ? (health?.status ?? "ok") : "offline"}
+                  tone={state === "ok" ? "positive" : "negative"}
+                />
+                <Row label="Version" value={health?.version ?? "—"} />
+                <Row label="Environment" value={health?.env ?? "—"} />
+              </dl>
+            )}
+          </CardContent>
         </Card>
 
-        <Link
-          href="/schema"
-          className="text-center text-sm text-muted-foreground hover:text-foreground"
-        >
-          Explore data source schema →
-        </Link>
+        <Card className="bg-panel">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <RiDatabase2Line className="size-4 text-muted-foreground" />
+              Data sources
+            </CardTitle>
+            <CardDescription>
+              Databases registered and connected.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            {state === "loading" ? (
+              <SkeletonRows rows={2} />
+            ) : sources.length > 0 ? (
+              <>
+                <ul className="flex flex-col divide-y divide-border">
+                  {sources.map((name) => (
+                    <li
+                      key={name}
+                      className="flex items-center justify-between gap-2 py-2"
+                    >
+                      <span className="truncate font-mono text-sm">{name}</span>
+                      <RiCheckboxCircleLine
+                        role="img"
+                        aria-label="connected"
+                        className="size-4 shrink-0 text-muted-foreground"
+                      />
+                    </li>
+                  ))}
+                </ul>
+                <CardLink href="/schema">Explore schema</CardLink>
+              </>
+            ) : (
+              <EmptyHint
+                action={<CardLink href="/schema">Add a source</CardLink>}
+              >
+                No database connected yet.
+              </EmptyHint>
+            )}
+          </CardContent>
+        </Card>
 
-        <p className="text-center font-mono text-xs text-muted-foreground">
-          {API_BASE_URL}
-        </p>
+        <Card className="bg-panel">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <RiBrainLine className="size-4 text-muted-foreground" />
+              AI providers
+            </CardTitle>
+            <CardDescription>
+              The reasoning engine behind questions.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {state === "loading" ? (
+              <SkeletonRows rows={2} />
+            ) : providers.length > 0 ? (
+              <ul className="flex flex-col divide-y divide-border">
+                {providers.map((name) => (
+                  <li key={name} className="py-2 font-mono text-sm">
+                    {name}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyHint action={<Badge variant="outline">Phase 3</Badge>}>
+                None registered. Conversational queries arrive with the agent
+                runtime.
+              </EmptyHint>
+            )}
+          </CardContent>
+        </Card>
       </div>
-    </main>
+
+      <NextStep sources={sources.length} ready={state === "ok"} />
+    </PageContainer>
   )
 }
 
-function StatusBadge({ state, status }: { state: LoadState; status?: string }) {
-  if (state === "loading") return <Badge variant="secondary">Checking…</Badge>
-  if (state === "error") return <Badge variant="destructive">Unreachable</Badge>
-  return (
-    <Badge>
-      <RiCheckboxCircleFill data-icon="inline-start" />
-      {status === "ok" ? "Operational" : (status ?? "Unknown")}
-    </Badge>
-  )
-}
-
-function StatusRow({
-  icon: Icon,
+function Row({
   label,
   value,
-  muted = false,
+  tone = "neutral",
 }: {
-  icon: RemixiconComponentType
   label: string
   value: string
-  muted?: boolean
+  tone?: "neutral" | "positive" | "negative"
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 py-2.5">
-      <div className="flex items-center gap-2 text-sm font-medium">
-        <Icon className="size-4 text-muted-foreground" />
-        {label}
-      </div>
-      <span
-        className={cn("font-mono text-sm", muted && "text-muted-foreground")}
+    <div className="flex items-center justify-between gap-4 py-2">
+      <dt className="text-sm text-muted-foreground">{label}</dt>
+      <dd
+        className={cn(
+          "truncate font-mono text-sm",
+          tone === "negative" && "text-destructive"
+        )}
       >
         {value}
-      </span>
+      </dd>
     </div>
   )
 }
 
-function LoadingRows() {
+function CardLink({
+  href,
+  children,
+}: {
+  href: string
+  children: React.ReactNode
+}) {
   return (
-    <div className="flex flex-col gap-3">
-      {[0, 1, 2, 3].map((i) => (
-        <div key={i} className="flex items-center justify-between gap-4 py-2.5">
-          <Skeleton className="h-4 w-28" />
-          <Skeleton className="h-4 w-20" />
+    <Link
+      href={href}
+      className="inline-flex items-center gap-1.5 text-sm text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+    >
+      {children}
+      <RiArrowRightLine className="size-3.5" />
+    </Link>
+  )
+}
+
+function EmptyHint({
+  children,
+  action,
+}: {
+  children: React.ReactNode
+  action?: React.ReactNode
+}) {
+  return (
+    <div className="flex flex-col items-start gap-2 py-1">
+      <p className="text-sm text-balance text-muted-foreground">{children}</p>
+      {action}
+    </div>
+  )
+}
+
+/** One clear next action, so the page answers "what do I do now?". */
+function NextStep({ sources, ready }: { sources: number; ready: boolean }) {
+  if (!ready) return null
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border bg-wash p-4">
+      <div className="flex min-w-0 flex-col gap-1">
+        <p className="text-sm font-medium">
+          {sources === 0
+            ? "Connect your first database"
+            : "Next: define what your data means"}
+        </p>
+        <p className="text-sm text-balance text-muted-foreground">
+          {sources === 0
+            ? "NomaData introspects tables, columns and relationships as soon as a source is connected."
+            : "Schema is discovered. The semantic model that turns it into business concepts is the next milestone."}
+        </p>
+      </div>
+      <Button variant="outline" size="sm" asChild>
+        <Link href="/schema">
+          {sources === 0 ? "Add data source" : "Open schema"}
+          <RiArrowRightLine data-icon="inline-end" />
+        </Link>
+      </Button>
+    </div>
+  )
+}
+
+function SkeletonRows({ rows }: { rows: number }) {
+  return (
+    <div className="flex flex-col divide-y divide-border">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="flex items-center justify-between gap-4 py-2">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-4 w-16" />
         </div>
       ))}
     </div>

@@ -47,7 +47,10 @@ function ThemeHotkey() {
         return
       }
 
-      if (event.key.toLowerCase() !== "d") {
+      // `key` is missing on some synthetic/IME composition keydown events.
+      // This listener is global (every keydown in the app passes through
+      // it), so an unguarded `.toLowerCase()` here crashes the whole page.
+      if (event.key?.toLowerCase() !== "d") {
         return
       }
 
