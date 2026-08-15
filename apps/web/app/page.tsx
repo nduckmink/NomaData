@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useCallback, useEffect, useState } from "react"
 import {
   type RemixiconComponentType,
@@ -163,6 +164,13 @@ export default function Page() {
             </Button>
           </CardFooter>
         </Card>
+
+        <Link
+          href="/schema"
+          className="text-center text-sm text-muted-foreground hover:text-foreground"
+        >
+          Explore data source schema →
+        </Link>
 
         <p className="text-center font-mono text-xs text-muted-foreground">
           {API_BASE_URL}
