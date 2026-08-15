@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from nomadata.core.errors import DataSourceNotFoundError
+from nomadata.connectors import build_data_source
+from nomadata.core.errors import ConfigurationError, DataSourceNotFoundError
 from nomadata.core.interfaces.data_source import DataSource
 from nomadata.core.models import (
     ColumnProfile,
@@ -45,6 +46,33 @@ def _manager(request: Request) -> DataSourceManager:
 @router.get("")
 async def list_data_sources() -> list[str]:
     return get_registry().data_source_names()
+
+
+@router.post("/verify", response_model=ConnectionStatus)
+async def verify_data_source(request: Request, config: DataSourceConfig) -> ConnectionStatus:
+    """Test a connection config WITHOUT saving it (used by the add/edit form)."""
+    manager = getattr(request.app.state, "datasource_manager", None)
+    if manager is not None:
+        # Edit form may leave the password blank — reuse the stored secret.
+        config = await manager.resolve_config(config)
+    try:
+        source = build_data_source(
+            config.kind,
+            name=config.name or "verify",
+            host=config.host,
+            port=config.port,
+            database=config.database,
+            user=config.user,
+            password=config.resolve_password(),
+        )
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    try:
+        return await source.test_connection()
+    finally:
+        close = getattr(source, "close", None)
+        if close is not None:
+            await close()
 
 
 @router.get("/{name}", response_model=DataSourceInfo)

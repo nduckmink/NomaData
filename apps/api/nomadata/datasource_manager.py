@@ -11,7 +11,10 @@ from nomadata.connectors import build_data_source
 from nomadata.core.interfaces.data_source import DataSource
 from nomadata.core.models import DataSourceConfig, DataSourceInfo
 from nomadata.core.registry import Registry
+from nomadata.logging import get_logger
 from nomadata.storage.data_source_repo import DataSourceRepository
+
+_log = get_logger()
 
 
 class DataSourceManager:
@@ -31,15 +34,35 @@ class DataSourceManager:
         )
 
     async def load_all(self) -> int:
-        """Register every persisted data source. Returns the count."""
+        """Register every persisted data source. One bad config is skipped, not
+        fatal. Returns the number successfully registered."""
         configs = await self._repo.list()
+        loaded = 0
         for cfg in configs:
-            self._registry.register_data_source(cfg.name, self._build(cfg))
-        return len(configs)
+            try:
+                self._registry.register_data_source(cfg.name, self._build(cfg))
+                loaded += 1
+            except Exception as exc:  # noqa: BLE001 - skip a bad source, keep going
+                _log.warning("nomadata.datasource.load_failed", name=cfg.name, error=str(exc))
+        return loaded
 
     async def get_info(self, name: str) -> DataSourceInfo | None:
         cfg = await self._repo.get(name)
         return cfg.to_info() if cfg else None
+
+    async def resolve_config(self, cfg: DataSourceConfig) -> DataSourceConfig:
+        """Fill a blank password from the stored config for an existing source
+        (so 'edit' / 'test' don't need the secret re-typed)."""
+        if not cfg.password and not cfg.password_env and cfg.name:
+            existing = await self._repo.get(cfg.name)
+            if existing is not None:
+                return cfg.model_copy(
+                    update={
+                        "password": existing.password,
+                        "password_env": existing.password_env,
+                    }
+                )
+        return cfg
 
     async def create(self, cfg: DataSourceConfig) -> DataSourceConfig:
         await self._repo.create(cfg)  # raises DataSourceExistsError on conflict
@@ -47,17 +70,7 @@ class DataSourceManager:
         return cfg
 
     async def update(self, name: str, cfg: DataSourceConfig) -> bool:
-        cfg = cfg.model_copy(update={"name": name})
-        # Preserve the stored secret when the edit form leaves the password blank.
-        if not cfg.password and not cfg.password_env:
-            existing = await self._repo.get(name)
-            if existing is not None:
-                cfg = cfg.model_copy(
-                    update={
-                        "password": existing.password,
-                        "password_env": existing.password_env,
-                    }
-                )
+        cfg = await self.resolve_config(cfg.model_copy(update={"name": name}))
         updated = await self._repo.update(cfg)
         if not updated:
             return False

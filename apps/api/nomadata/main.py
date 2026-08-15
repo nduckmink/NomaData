@@ -10,11 +10,13 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from nomadata.api.v1.router import router as v1_router
 from nomadata.config import get_settings
+from nomadata.core.errors import DataConnectionError
 from nomadata.core.registry import get_registry
 from nomadata.datasource_manager import DataSourceManager
 from nomadata.logging import configure_logging, get_logger
@@ -87,6 +89,12 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    @app.exception_handler(DataConnectionError)
+    async def _data_connection_error(_: Request, exc: DataConnectionError) -> JSONResponse:
+        # A data source that can't be reached is an upstream failure, not a bug.
+        return JSONResponse(status_code=502, content={"detail": str(exc)})
+
     app.include_router(v1_router, prefix="/api/v1")
     return app
 

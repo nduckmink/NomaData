@@ -71,6 +71,24 @@ export interface DataSourceInfo {
   uses_password_env: boolean
 }
 
+export interface ConnectionStatus {
+  state: "ok" | "error"
+  latency_ms?: number | null
+  message?: string | null
+}
+
+export async function verifyDataSource(
+  input: DataSourceInput
+): Promise<ConnectionStatus> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/datasources/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return (await res.json()) as ConnectionStatus
+}
+
 export async function getDataSource(name: string): Promise<DataSourceInfo> {
   return getJSON<DataSourceInfo>(
     `/api/v1/datasources/${encodeURIComponent(name)}`
