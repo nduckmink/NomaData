@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   RiArrowRightLine,
   RiDatabase2Line,
@@ -31,8 +31,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
+
+import { AddDataSourceDialog } from "./add-data-source"
+import { TableErd } from "./erd"
 
 type Status = "loading" | "error" | "empty" | "ready"
 
@@ -83,6 +87,24 @@ export default function SchemaPage() {
     return () => controller.abort()
   }, [source])
 
+  // Called from the "Add source" dialog (an event handler — setState is fine).
+  const refreshSources = useCallback(async (preferred?: string) => {
+    setStatus("loading")
+    try {
+      const names = await getDataSources()
+      if (names.length === 0) {
+        setSources([])
+        setSource(null)
+        setStatus("empty")
+        return
+      }
+      setSources(names)
+      setSource(preferred && names.includes(preferred) ? preferred : names[0])
+    } catch {
+      setStatus("error")
+    }
+  }, [])
+
   const tables = useMemo(() => catalog?.tables ?? [], [catalog])
   const filtered = useMemo(
     () =>
@@ -113,24 +135,29 @@ export default function SchemaPage() {
             <RiDatabase2Line className="size-6 text-muted-foreground" />
             Schema
           </span>
-          {sources.length > 0 && (
-            <ToggleGroup
-              type="single"
-              value={source ?? ""}
-              onValueChange={(v) => {
-                if (v && v !== source) {
-                  setStatus("loading")
-                  setSource(v)
-                }
-              }}
-            >
-              {sources.map((s) => (
-                <ToggleGroupItem key={s} value={s} className="font-mono">
-                  {s}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          )}
+          <div className="flex items-center gap-2">
+            {sources.length > 0 && (
+              <ToggleGroup
+                type="single"
+                value={source ?? ""}
+                onValueChange={(v) => {
+                  if (v && v !== source) {
+                    setStatus("loading")
+                    setSource(v)
+                  }
+                }}
+              >
+                {sources.map((s) => (
+                  <ToggleGroupItem key={s} value={s} className="font-mono">
+                    {s}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            )}
+            <AddDataSourceDialog
+              onCreated={(name) => void refreshSources(name)}
+            />
+          </div>
         </div>
         {status === "ready" && (
           <div className="flex gap-6 text-sm text-muted-foreground">
@@ -155,16 +182,18 @@ export default function SchemaPage() {
       )}
 
       {status === "empty" && (
-        <Alert>
-          <RiDatabase2Line />
-          <AlertTitle>No data source configured</AlertTitle>
-          <AlertDescription>
-            Add a connection to{" "}
-            <code className="font-mono">data_sources.json</code> (see{" "}
-            <code className="font-mono">data_sources.example.json</code>) and
-            restart the API.
-          </AlertDescription>
-        </Alert>
+        <div className="flex flex-col items-start gap-4">
+          <Alert>
+            <RiDatabase2Line />
+            <AlertTitle>No data source connected</AlertTitle>
+            <AlertDescription>
+              Add a database connection to introspect its schema.
+            </AlertDescription>
+          </Alert>
+          <AddDataSourceDialog
+            onCreated={(name) => void refreshSources(name)}
+          />
+        </div>
       )}
 
       {status === "ready" && (
@@ -200,8 +229,19 @@ export default function SchemaPage() {
           </aside>
 
           <section className="min-w-0">
-            {selectedTable ? (
-              <ColumnTable table={selectedTable} />
+            {selectedTable && catalog ? (
+              <Tabs defaultValue="columns" className="gap-3">
+                <TabsList>
+                  <TabsTrigger value="columns">Columns</TabsTrigger>
+                  <TabsTrigger value="erd">Diagram</TabsTrigger>
+                </TabsList>
+                <TabsContent value="columns">
+                  <ColumnTable table={selectedTable} />
+                </TabsContent>
+                <TabsContent value="erd">
+                  <TableErd catalog={catalog} table={selectedTable} />
+                </TabsContent>
+              </Tabs>
             ) : (
               <p className="text-sm text-muted-foreground">Select a table.</p>
             )}
