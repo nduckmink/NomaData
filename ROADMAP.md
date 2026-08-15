@@ -154,6 +154,9 @@ Database targets (adapted to the data on hand — see `test/infra`):
 
 > **MySQL ✅ · SQL Server ✅ · PostgreSQL (later)**
 
+Full connector priority list (SQL + warehouses, by effort × popularity):
+[docs/CONNECTORS.md](docs/CONNECTORS.md).
+
 ## 1.1 Database Connection
 
 * [x] Create data source configuration (data_sources.json; encrypted storage in Phase 6)
