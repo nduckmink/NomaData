@@ -1,0 +1,68 @@
+name: nomadata
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nomadata
+      POSTGRES_PASSWORD: nomadata
+      POSTGRES_DB: nomadata
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nomadata"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+    environment:
+      NOMADATA_ENV: development
+      NOMADATA_DATABASE_URL: postgresql://nomadata:nomadata@postgres:5432/nomadata
+      NOMADATA_CUBE_URL: http://cube:4000
+      NOMADATA_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: sync
+          path: ./apps/api/nomadata
+          target: /app/nomadata
+
+  web:
+    build:
+      context: ./apps/web
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  cube:
+    image: cubejs/cube:latest
+    environment:
+      CUBEJS_DEV_MODE: "true"
+      CUBEJS_DB_TYPE: postgres
+      CUBEJS_DB_HOST: postgres
+      CUBEJS_DB_NAME: nomadata
+      CUBEJS_DB_USER: nomadata
+      CUBEJS_DB_PASS: nomadata
+      CUBEJS_API_SECRET: dev-secret-change-me
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./cube:/cube/conf
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

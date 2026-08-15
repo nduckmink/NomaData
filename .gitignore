@@ -1,0 +1,54 @@
+# ---------- Environment ----------
+.env
+.env.*
+!.env.example
+*.local
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.uv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.import_linter_cache/
+
+# ---------- Node / Next.js ----------
+node_modules/
+.next/
+out/
+.turbo/
+.pnpm-store/
+*.tsbuildinfo
+next-env.d.ts
+
+# ---------- Cube ----------
+cube/.env
+.cubestore/
+
+# ---------- Editors / OS ----------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.log
+
+# ---------- Docker ----------
+# (compose overrides kept local)
+docker-compose.override.yml
+
+# ---------- Test Data ----------
+/test/data/*

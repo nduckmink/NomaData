@@ -1,0 +1,70 @@
+"""Runtime registry for pluggable implementations.
+
+The composition root (``nomadata.main``) registers concrete AIProvider /
+DataSource / QueryEngine implementations here. Higher layers (e.g. the agent)
+resolve them *by interface*, never by concrete class — that is what keeps the
+system model-agnostic and data-source-agnostic.
+
+In M0 the registry exists and is wired, but nothing is registered yet.
+"""
+
+from __future__ import annotations
+
+from nomadata.core.errors import (
+    DataSourceNotFoundError,
+    ProviderNotFoundError,
+    QueryEngineNotConfiguredError,
+)
+from nomadata.core.interfaces.ai_provider import AIProvider
+from nomadata.core.interfaces.data_source import DataSource
+from nomadata.core.interfaces.query_engine import QueryEngine
+
+
+class Registry:
+    def __init__(self) -> None:
+        self._providers: dict[str, AIProvider] = {}
+        self._data_sources: dict[str, DataSource] = {}
+        self._query_engine: QueryEngine | None = None
+
+    # ---- AI providers ----
+    def register_provider(self, name: str, provider: AIProvider) -> None:
+        self._providers[name] = provider
+
+    def get_provider(self, name: str) -> AIProvider:
+        try:
+            return self._providers[name]
+        except KeyError as exc:
+            raise ProviderNotFoundError(name) from exc
+
+    def provider_names(self) -> list[str]:
+        return sorted(self._providers)
+
+    # ---- Data sources ----
+    def register_data_source(self, name: str, source: DataSource) -> None:
+        self._data_sources[name] = source
+
+    def get_data_source(self, name: str) -> DataSource:
+        try:
+            return self._data_sources[name]
+        except KeyError as exc:
+            raise DataSourceNotFoundError(name) from exc
+
+    def data_source_names(self) -> list[str]:
+        return sorted(self._data_sources)
+
+    # ---- Query engine ----
+    def set_query_engine(self, engine: QueryEngine) -> None:
+        self._query_engine = engine
+
+    def get_query_engine(self) -> QueryEngine:
+        if self._query_engine is None:
+            raise QueryEngineNotConfiguredError("No query engine configured.")
+        return self._query_engine
+
+
+_registry = Registry()
+
+
+def get_registry() -> Registry:
+    """Return the process-wide registry."""
+    return _registry

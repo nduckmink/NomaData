@@ -1,0 +1,107 @@
+[project]
+name = "nomadata-api"
+version = "0.0.1"
+description = "NomaData API — model-agnostic AI client for conversational BI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "structlog>=24.4",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "import-linter>=2.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nomadata"]
+
+# ---------- Ruff ----------
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM"]
+
+# ---------- Mypy ----------
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+# Strict on the architectural core — contracts must be airtight.
+[[tool.mypy.overrides]]
+module = "nomadata.core.*"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+strict_equality = true
+
+# ---------- Pytest ----------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+# ---------- Import Linter (architecture boundaries) ----------
+[tool.importlinter]
+root_package = "nomadata"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "core depends on nothing inside nomadata (except core)"
+type = "forbidden"
+source_modules = ["nomadata.core"]
+forbidden_modules = [
+    "nomadata.providers",
+    "nomadata.connectors",
+    "nomadata.query",
+    "nomadata.semantic",
+    "nomadata.agent",
+    "nomadata.api",
+]
+
+[[tool.importlinter.contracts]]
+name = "only providers may import LLM vendor SDKs"
+type = "forbidden"
+source_modules = [
+    "nomadata.core",
+    "nomadata.connectors",
+    "nomadata.query",
+    "nomadata.semantic",
+    "nomadata.agent",
+]
+# Top-level SDK packages only (import-linter forbids external subpackages).
+forbidden_modules = ["openai", "anthropic"]
+
+[[tool.importlinter.contracts]]
+name = "only connectors may import database drivers"
+type = "forbidden"
+source_modules = [
+    "nomadata.core",
+    "nomadata.providers",
+    "nomadata.semantic",
+    "nomadata.agent",
+]
+forbidden_modules = ["psycopg", "psycopg2", "asyncpg", "sqlalchemy"]
+
+[[tool.importlinter.contracts]]
+name = "providers and connectors stay independent of each other and of higher layers"
+type = "independence"
+modules = [
+    "nomadata.providers",
+    "nomadata.connectors",
+]
