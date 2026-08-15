@@ -41,19 +41,10 @@ class Settings(BaseSettings):
     ai_api_key: str = ""
     ai_model: str = "gpt-4o-mini"
 
-    # Primary data source (M1 — one source configured via env; multiple in M5).
-    # ds_kind: "mysql" | "sqlserver" | "" (disabled).
-    ds_kind: str = ""
-    ds_name: str = "primary"
-    ds_host: str = "localhost"
-    ds_port: int = 3306
-    ds_database: str = ""
-    ds_user: str = ""
-    ds_password: str = ""
-
-    @property
-    def data_source_configured(self) -> bool:
-        return bool(self.ds_kind and self.ds_database)
+    # Data sources are defined in data_sources.json (see nomadata.data_sources),
+    # NOT here — connection config is kept out of env/secrets. This only points
+    # at the file; empty = default location (data_sources.json at the repo root).
+    data_sources_file: str = ""
 
     @field_validator("cors_origins", mode="before")
     @classmethod

@@ -18,6 +18,7 @@ from nomadata.config import get_settings
 from nomadata.connectors import build_data_source
 from nomadata.core.interfaces.data_source import DataSource
 from nomadata.core.registry import get_registry
+from nomadata.data_sources import load_data_sources
 from nomadata.logging import configure_logging, get_logger
 
 
@@ -28,22 +29,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log = get_logger()
     log.info("nomadata.startup", env=settings.env, version=settings.version)
 
-    # M1: register the configured data source (one source via env; many in M5).
+    # M1: register data sources declared in data_sources.json.
     registry = get_registry()
     sources: list[DataSource] = []
-    if settings.data_source_configured:
+    for cfg in load_data_sources(settings.data_sources_file or None):
         source = build_data_source(
-            settings.ds_kind,
-            name=settings.ds_name,
-            host=settings.ds_host,
-            port=settings.ds_port,
-            database=settings.ds_database,
-            user=settings.ds_user,
-            password=settings.ds_password,
+            cfg.kind,
+            name=cfg.name,
+            host=cfg.host,
+            port=cfg.port,
+            database=cfg.database,
+            user=cfg.user,
+            password=cfg.resolve_password(),
         )
         registry.register_data_source(source.name, source)
         sources.append(source)
-        log.info("nomadata.datasource.registered", name=source.name, kind=settings.ds_kind)
+        log.info("nomadata.datasource.registered", name=source.name, kind=cfg.kind)
 
     yield
 
