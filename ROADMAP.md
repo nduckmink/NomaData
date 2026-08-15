@@ -17,7 +17,8 @@ This roadmap describes the planned development path from the initial technical f
 >   124 tables / 1687 cols / 187 FKs; SQL Server 196 tables / 3040 cols / 12 FKs.
 >
 > **Current focus → Phase 2 (Semantic Intelligence): turn the schema into a
-> business semantic model.**
+> business semantic model.** Plan: [docs/M2-SEMANTIC.md](docs/M2-SEMANTIC.md)
+> (decisions: Postgres storage · AI-first · full Cube).
 
 ---
 
