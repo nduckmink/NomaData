@@ -41,6 +41,20 @@ class Settings(BaseSettings):
     ai_api_key: str = ""
     ai_model: str = "gpt-4o-mini"
 
+    # Primary data source (M1 — one source configured via env; multiple in M5).
+    # ds_kind: "mysql" | "sqlserver" | "" (disabled).
+    ds_kind: str = ""
+    ds_name: str = "primary"
+    ds_host: str = "localhost"
+    ds_port: int = 3306
+    ds_database: str = ""
+    ds_user: str = ""
+    ds_password: str = ""
+
+    @property
+    def data_source_configured(self) -> bool:
+        return bool(self.ds_kind and self.ds_database)
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:

@@ -15,6 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from nomadata.api.v1.router import router as v1_router
 from nomadata.config import get_settings
+from nomadata.connectors import build_data_source
+from nomadata.core.interfaces.data_source import DataSource
+from nomadata.core.registry import get_registry
 from nomadata.logging import configure_logging, get_logger
 
 
@@ -24,8 +27,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings.log_level)
     log = get_logger()
     log.info("nomadata.startup", env=settings.env, version=settings.version)
-    # M0: no providers/connectors registered yet. Later phases wire them here.
+
+    # M1: register the configured data source (one source via env; many in M5).
+    registry = get_registry()
+    sources: list[DataSource] = []
+    if settings.data_source_configured:
+        source = build_data_source(
+            settings.ds_kind,
+            name=settings.ds_name,
+            host=settings.ds_host,
+            port=settings.ds_port,
+            database=settings.ds_database,
+            user=settings.ds_user,
+            password=settings.ds_password,
+        )
+        registry.register_data_source(source.name, source)
+        sources.append(source)
+        log.info("nomadata.datasource.registered", name=source.name, kind=settings.ds_kind)
+
     yield
+
+    for source in sources:
+        close = getattr(source, "close", None)
+        if close is not None:
+            await close()
     log.info("nomadata.shutdown")
 
 

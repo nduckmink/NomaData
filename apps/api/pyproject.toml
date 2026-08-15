@@ -10,6 +10,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "structlog>=24.4",
+    "aiomysql>=0.2.0",
 ]
 
 [dependency-groups]
@@ -50,6 +51,11 @@ module = "nomadata.core.*"
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 strict_equality = true
+
+# Third-party DB drivers without type stubs.
+[[tool.mypy.overrides]]
+module = ["aiomysql.*"]
+ignore_missing_imports = true
 
 # ---------- Pytest ----------
 [tool.pytest.ini_options]
@@ -96,7 +102,14 @@ source_modules = [
     "nomadata.semantic",
     "nomadata.agent",
 ]
-forbidden_modules = ["psycopg", "psycopg2", "asyncpg", "sqlalchemy"]
+forbidden_modules = [
+    "psycopg",
+    "psycopg2",
+    "asyncpg",
+    "sqlalchemy",
+    "aiomysql",
+    "pymysql",
+]
 
 [[tool.importlinter.contracts]]
 name = "providers and connectors stay independent of each other and of higher layers"

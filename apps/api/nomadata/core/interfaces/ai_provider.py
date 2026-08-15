@@ -39,9 +39,7 @@ class AIProvider(ABC):
         """Free-form chat completion."""
 
     @abstractmethod
-    async def generate_structured(
-        self, messages: list[Message], schema: type[T], **opts: Any
-    ) -> T:
+    async def generate_structured(self, messages: list[Message], schema: type[T], **opts: Any) -> T:
         """Return a validated instance of ``schema`` (used for semantic/query output)."""
 
     @abstractmethod
