@@ -60,27 +60,41 @@ Cách hoạt động: `docker compose exec` nhảy vào bên trong container r�
 client SQL có sẵn ở đó. Kết nối xảy ra ngay trong container, `localhost` ở đây
 là chính container đó — không đi qua mạng, không dùng cổng 3307/1434.
 
-```bash
-# MySQL
+**MySQL** — giống nhau ở mọi shell:
+
+```
 docker compose exec mysql mysql -uscp -pscp stg_scp_app
 #                        ^^^^^ ^^^^^
 #                        │     └── lệnh client mysql chạy bên trong
 #                        └── tên service trong docker-compose.yml
+```
 
-# SQL Server
+**SQL Server** — lệnh khác nhau tuỳ shell, copy đúng cái của shell bạn đang dùng:
+
+```powershell
+# PowerShell / CMD
+docker compose exec mssql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Scp_Str0ng!Pass' -C -d stg_scp_2
+```
+
+```bash
+# Git Bash — bắt buộc có tiền tố MSYS_NO_PATHCONV=1
 MSYS_NO_PATHCONV=1 docker compose exec mssql /opt/mssql-tools18/bin/sqlcmd \
   -S localhost -U sa -P 'Scp_Str0ng!Pass' -C -d stg_scp_2
 ```
 
 Gõ xong thì thoát bằng `exit` (MySQL) hoặc `QUIT` (sqlcmd).
 
-Hai chi tiết dễ vướng ở lệnh SQL Server:
+Ba chi tiết dễ vướng ở lệnh SQL Server:
 
-- **`MSYS_NO_PATHCONV=1` chỉ cần khi chạy trong Git Bash.** Git Bash tự dịch mọi
-  tham số trông giống đường dẫn Unix sang đường dẫn Windows, nên
+- **Đừng dán bản Git Bash vào PowerShell.** PowerShell không có cú pháp đặt biến
+  môi trường ngay trước lệnh (`VAR=x lệnh`) — đó là cú pháp của bash — nên nó sẽ
+  coi `MSYS_NO_PATHCONV=1` là tên lệnh và báo
+  `The term 'MSYS_NO_PATHCONV=1' is not recognized`. Bỏ tiền tố đi là chạy.
+- **`MSYS_NO_PATHCONV=1` chỉ cần cho Git Bash.** Git Bash tự dịch mọi tham số
+  trông giống đường dẫn Unix sang đường dẫn Windows, nên
   `/opt/mssql-tools18/bin/sqlcmd` bị biến thành
   `C:/Program Files/Git/opt/mssql-tools18/bin/sqlcmd` và báo
-  `no such file or directory`. Biến đó tắt hành vi dịch. PowerShell và CMD không dính.
+  `no such file or directory`. Biến đó tắt hành vi dịch.
 - **`-C`** là trust self-signed certificate, thiếu nó sqlcmd sẽ bỏ kết nối.
 
 Muốn dùng GUI (HeidiSQL, DBeaver, TablePlus, SSMS) thì bỏ qua mục này, dùng
@@ -155,13 +169,21 @@ bất kỳ ai quét cổng. Nếu chỉ cần NomaData "đi qua mạng để t�
 
 ## Kiểm tra data
 
-```bash
-# MySQL — phải ra 124 bảng + 3 routine = đúng 127 file dump
-docker compose exec -T mysql mysql -uscp -pscp stg_scp_app -e "
-  SELECT COUNT(*) FROM information_schema.tables   WHERE table_schema='stg_scp_app';
-  SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema='stg_scp_app';"
+MySQL — phải ra **124 bảng + 3 routine** = đúng 127 file dump:
 
-# SQL Server — phải ra 196 bảng, 5 view, 7 procedure
+```
+docker compose exec -T mysql mysql -uscp -pscp stg_scp_app -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='stg_scp_app'; SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema='stg_scp_app';"
+```
+
+SQL Server — phải ra **196 bảng**:
+
+```powershell
+# PowerShell / CMD
+docker compose exec -T mssql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Scp_Str0ng!Pass' -C -Q "SELECT COUNT(*) FROM stg_scp_2.sys.tables;"
+```
+
+```bash
+# Git Bash
 MSYS_NO_PATHCONV=1 docker compose exec -T mssql /opt/mssql-tools18/bin/sqlcmd \
   -S localhost -U sa -P 'Scp_Str0ng!Pass' -C -Q \
   "SELECT COUNT(*) FROM stg_scp_2.sys.tables;"
