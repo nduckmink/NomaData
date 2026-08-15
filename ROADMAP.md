@@ -6,6 +6,15 @@ NomaData is an AI-native, model-agnostic client for conversational Business Inte
 
 This roadmap describes the planned development path from the initial technical foundation to a production-ready AI data workspace.
 
+> **Progress (2026-08-15):** Phase 0 — Foundation ✅ **complete**. The end-to-end
+> skeleton boots (web → API health), the five core interfaces exist, dev runs
+> via `pnpm` scripts (infra in Docker, apps on watch), and architecture
+> boundaries are enforced by import-linter. See
+> [docs/M0-FOUNDATION.md](docs/M0-FOUNDATION.md) and
+> [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
+>
+> **Current focus → Phase 1 (Data Connectivity): the PostgreSQL connector.**
+
 ---
 
 ## 1. Roadmap Principles
@@ -71,7 +80,7 @@ AI-Native Data Workspace
 
 ---
 
-# Phase 0 — Foundation
+# Phase 0 — Foundation ✅
 
 ## Objective
 
@@ -81,53 +90,53 @@ Establish the repository structure, development environment, core interfaces, an
 
 ### Repository
 
-* [ ] Define monorepo structure
-* [ ] Add development documentation
+* [x] Define monorepo structure (`apps/api`, `apps/web`, `cube/`, pnpm workspace)
+* [x] Add development documentation (M0-FOUNDATION, ARCHITECTURE, GETTING-STARTED)
 * [ ] Add contribution guidelines
-* [ ] Add environment configuration
-* [ ] Add `.env.example`
-* [ ] Add linting and formatting
-* [ ] Add type checking
-* [ ] Add basic CI pipeline
+* [x] Add environment configuration (typed settings + configurable infra creds)
+* [x] Add `.env.example`
+* [x] Add linting and formatting (ruff, eslint, prettier)
+* [x] Add type checking (mypy strict on core, tsc)
+* [ ] ~~Add basic CI pipeline~~ — deferred (GitHub Actions skipped; boundaries enforced locally via import-linter)
 
 ### Backend
 
-* [ ] Initialize FastAPI application
-* [ ] Define API versioning strategy
-* [ ] Define configuration management
-* [ ] Define dependency injection strategy
-* [ ] Define error handling
-* [ ] Define logging structure
-* [ ] Define health-check endpoint
+* [x] Initialize FastAPI application
+* [x] Define API versioning strategy (`/api/v1`)
+* [x] Define configuration management (pydantic-settings)
+* [x] Define dependency injection strategy (registry + composition root)
+* [x] Define error handling (`core/errors.py`)
+* [x] Define logging structure (structlog)
+* [x] Define health-check endpoint
 
 ### Frontend
 
-* [ ] Initialize NomaData client
-* [ ] Define application shell
-* [ ] Define routing
-* [ ] Define basic design system
-* [ ] Define API client layer
-* [ ] Define state management strategy
+* [x] Initialize NomaData client (Next.js 16 + React 19)
+* [x] Define application shell
+* [x] Define routing (App Router)
+* [x] Define basic design system (shadcn `radix-lyra`)
+* [x] Define API client layer (`lib/api-client.ts`)
+* [ ] Define state management strategy — deferred until real client state exists
 
 ### Core Interfaces
 
 Define provider-independent interfaces:
 
 ```text
-AIProvider
-DataSource
-SemanticModel
-QueryEngine
-Visualization
+AIProvider           ✓
+DataSource           ✓
+SemanticModel        ✓
+QueryEngine          ✓
+Visualization        ✓
 ```
 
 ## Acceptance Criteria
 
-* [ ] Client can start locally
-* [ ] Backend can start locally
-* [ ] Frontend can communicate with backend
-* [ ] CI passes on every pull request
-* [ ] No application component directly depends on a specific LLM provider
+* [x] Client can start locally
+* [x] Backend can start locally
+* [x] Frontend can communicate with backend
+* [ ] ~~CI passes on every pull request~~ — deferred (CI skipped)
+* [x] No application component directly depends on a specific LLM provider (enforced by import-linter)
 
 ---
 
@@ -1111,9 +1120,9 @@ For AI-related features, additionally:
 The immediate development priority is:
 
 ```text
-1. Foundation
+1. Foundation                    ✅ done
        ↓
-2. PostgreSQL Connector
+2. PostgreSQL Connector          ← next
        ↓
 3. Schema Introspection
        ↓
