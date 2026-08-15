@@ -1,0 +1,73 @@
+# Hạ tầng DB giả lập của "bên đang vận hành sẵn" (SCP).
+#
+# Đây là một compose project ĐỘC LẬP với NomaData: project name riêng, network
+# riêng, volume riêng. NomaData nhìn nó qua cổng host, đúng như nhìn một DB của
+# khách hàng chạy ở đâu đó bên ngoài — không share network, không service nào
+# của app phụ thuộc vào nó, và Cube cũng không đụng tới.
+#
+# Chạy từ thư mục này:
+#   docker compose up -d          (cả hai)
+#   docker compose up -d mysql    (chỉ MySQL)
+#
+# Cổng host lệch 1 so với mặc định (3307 / 1434) để không đụng DB cài sẵn trên máy.
+
+name: scp-source
+
+services:
+  # ---------- DB 1: MySQL 8.0 — schema stg_scp_app ----------
+  mysql:
+    image: mysql:8.0
+    container_name: scp-mysql
+    restart: unless-stopped
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --log-bin-trust-function-creators=1
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_520_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: scp_root
+      MYSQL_DATABASE: stg_scp_app
+      MYSQL_USER: scp
+      MYSQL_PASSWORD: scp
+    ports:
+      - "3307:3306"
+    volumes:
+      # 127 file dump, entrypoint replay theo thứ tự alphabet ở lần boot đầu.
+      - ../data/stg_scp_app:/docker-entrypoint-initdb.d:ro
+      - mysqldata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uscp -pscp"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+
+  # ---------- DB 2: SQL Server 2022 — restore từ stg_scp_2.bak ----------
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: scp-mssql
+    restart: unless-stopped
+    user: root
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Scp_Str0ng!Pass"
+      MSSQL_PID: Developer
+    ports:
+      - "1434:1433"
+    volumes:
+      - ../data/stg_scp_2.bak:/backup/stg_scp_2.bak:ro
+      - ./mssql/restore.sh:/usr/local/bin/restore.sh:ro
+      - mssqldata:/var/opt/mssql
+    # Boot sqlservr rồi restore .bak một lần ở nền (xem mssql/restore.sh).
+    entrypoint: ["/bin/bash", "/usr/local/bin/restore.sh"]
+    healthcheck:
+      # Chỉ báo healthy khi DB stg_scp_2 đã ONLINE, không phải khi sqlservr vừa lên.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -b -Q \"SET NOCOUNT ON; IF DB_ID('stg_scp_2') IS NULL OR DATABASEPROPERTYEX('stg_scp_2','Status') <> 'ONLINE' THROW 50000, 'not ready', 1;\" || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -b -Q \"SET NOCOUNT ON; IF DB_ID('stg_scp_2') IS NULL OR DATABASEPROPERTYEX('stg_scp_2','Status') <> 'ONLINE' THROW 50000, 'not ready', 1;\""]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 600s
+
+volumes:
+  mysqldata:
+  mssqldata:
