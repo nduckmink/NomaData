@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "description": "NomaData — model-agnostic AI client for conversational BI",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "packageManager": "pnpm@9.15.9",
   "scripts": {
     "setup": "pnpm install && pnpm api:sync",

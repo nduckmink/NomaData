@@ -246,7 +246,22 @@ Alerts / Reports / Automation
 
 ## License
 
-License will be defined as the project evolves.
+[PolyForm Noncommercial License 1.0.0](LICENSE) — SPDX `PolyForm-Noncommercial-1.0.0`.
+
+> Required Notice: Copyright Nguyễn Đức Minh (https://github.com/nduckmink/NomaData)
+
+You may use, modify and redistribute NomaData freely for **any noncommercial
+purpose**, including personal projects, study and research. Use by charities,
+schools, public research bodies, and government institutions counts as
+noncommercial regardless of how they are funded.
+
+**Commercial use is not granted by this license.** That includes running
+NomaData as part of a paid product or service, or using it internally to
+operate a for-profit business. If you need that, ask the copyright holder for a
+separate commercial license.
+
+This is a source-available license, not an OSI-approved open source one — tools
+that check for OSI licenses will flag it, and that is expected.
 
 ---
 

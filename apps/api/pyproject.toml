@@ -3,6 +3,7 @@ name = "nomadata-api"
 version = "0.0.1"
 description = "NomaData API — model-agnostic AI client for conversational BI"
 readme = "README.md"
+license = "PolyForm-Noncommercial-1.0.0"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
