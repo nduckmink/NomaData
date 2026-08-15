@@ -2,15 +2,15 @@
 
 import { useCallback, useEffect, useState } from "react"
 import {
-  Activity,
-  BrainCircuit,
-  CheckCircle2,
-  Database,
-  type LucideIcon,
-  RefreshCw,
-  Server,
-  XCircle,
-} from "lucide-react"
+  type RemixiconComponentType,
+  RiBrainLine,
+  RiCheckboxCircleFill,
+  RiCloseCircleLine,
+  RiDatabase2Line,
+  RiPulseLine,
+  RiRefreshLine,
+  RiServerLine,
+} from "@remixicon/react"
 
 import { API_BASE_URL, getHealth, type HealthResponse } from "@/lib/api-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -100,11 +100,11 @@ export default function Page() {
 
             {state === "error" && (
               <Alert variant="destructive">
-                <XCircle />
+                <RiCloseCircleLine />
                 <AlertTitle>API unreachable</AlertTitle>
                 <AlertDescription>
-                  Could not reach the API at {API_BASE_URL}. Start the backend
-                  with <code className="font-mono">make api-dev</code>.
+                  Could not reach the API at {API_BASE_URL}. Start it with{" "}
+                  <code className="font-mono">pnpm api:dev</code>.
                 </AlertDescription>
               </Alert>
             )}
@@ -112,17 +112,17 @@ export default function Page() {
             {state === "ok" && health && (
               <div className="flex flex-col divide-y divide-border">
                 <StatusRow
-                  icon={Server}
+                  icon={RiServerLine}
                   label="API"
                   value={health.checks.api ?? "unknown"}
                 />
                 <StatusRow
-                  icon={Activity}
+                  icon={RiPulseLine}
                   label="Environment"
                   value={health.env}
                 />
                 <StatusRow
-                  icon={BrainCircuit}
+                  icon={RiBrainLine}
                   label="AI providers"
                   value={
                     health.providers.length
@@ -132,7 +132,7 @@ export default function Page() {
                   muted={health.providers.length === 0}
                 />
                 <StatusRow
-                  icon={Database}
+                  icon={RiDatabase2Line}
                   label="Data sources"
                   value={
                     health.data_sources.length
@@ -158,7 +158,7 @@ export default function Page() {
               }}
               disabled={state === "loading"}
             >
-              <RefreshCw data-icon="inline-start" />
+              <RiRefreshLine data-icon="inline-start" />
               Refresh
             </Button>
           </CardFooter>
@@ -177,7 +177,7 @@ function StatusBadge({ state, status }: { state: LoadState; status?: string }) {
   if (state === "error") return <Badge variant="destructive">Unreachable</Badge>
   return (
     <Badge>
-      <CheckCircle2 data-icon="inline-start" />
+      <RiCheckboxCircleFill data-icon="inline-start" />
       {status === "ok" ? "Operational" : (status ?? "Unknown")}
     </Badge>
   )
@@ -189,7 +189,7 @@ function StatusRow({
   value,
   muted = false,
 }: {
-  icon: LucideIcon
+  icon: RemixiconComponentType
   label: string
   value: string
   muted?: boolean
