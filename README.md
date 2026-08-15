@@ -160,6 +160,26 @@ The initial architecture is centered around four layers:
 └─────────────────────────────────────────┘
 ```
 
+## Development
+
+Run the full stack with Docker:
+
+```bash
+cp .env.example .env
+make up          # postgres + api + web + cube  →  http://localhost:3000
+```
+
+Or run locally without Docker (two terminals):
+
+```bash
+cd apps/api && uv sync && uv run uvicorn nomadata.main:app --reload --port 8000
+cd apps/web && pnpm install && pnpm dev
+```
+
+**Full setup, commands, and troubleshooting → [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).**
+
+See also: [Vision](VISION.md) · [Roadmap](ROADMAP.md) · [M0 Foundation plan](docs/M0-FOUNDATION.md) · [Architecture](docs/ARCHITECTURE.md).
+
 ## Status
 
 🚧 **Early development**
