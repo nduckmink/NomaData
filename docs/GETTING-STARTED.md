@@ -64,63 +64,64 @@ Secrets stay in `.env`; they are never sent to the LLM.
 
 ---
 
-## 4. Run the whole stack with Docker (one command)
+## 4. Recommended dev workflow (infra in Docker, apps in watch mode)
+
+The day-to-day loop: run only the **backing services** (Postgres + Cube) in
+Docker, and run the **API and web client locally** so you get hot reload / HMR.
+This is the pnpm-monorepo pattern — infra is disposable, apps stay on watch.
+
+First time only — install deps:
 
 ```bash
-make up          # docker compose up --build: postgres + api + web + cube
+make install                 # uv sync (api) + pnpm install (web)
 ```
 
-Then open http://localhost:3000 — you should see the **System Status** page
-reporting the API as *Operational*.
+Then, each session:
 
 ```bash
-make down        # stop and remove containers
-make logs        # tail logs from all services
+# 1. Backing services in the background (postgres + cube)
+make infra
+
+# 2. API with hot reload            (terminal A)
+make api-dev                 # http://localhost:8000 — reloads on .py changes
+
+# 3. Web client with HMR            (terminal B)
+make web-dev                 # http://localhost:3000 — reloads on .tsx changes
 ```
 
-> Docker pulls the `postgres`, `cubejs/cube`, and builds the api/web images on
-> first run, so the first `make up` takes a few minutes.
-
----
-
-## 5. Run locally without Docker
-
-Two terminals — one for the API, one for the web client.
-
-### 5.1 Backend (`apps/api`)
-
-```bash
-cd apps/api
-uv sync                                                   # install deps + venv
-uv run uvicorn nomadata.main:app --reload --port 8000     # run with hot reload
-```
-
-Verify it's up:
+Open http://localhost:3000 — the **System Status** page fetches `/health` and
+shows the API as *Operational*. Verify the API directly:
 
 ```bash
 curl http://localhost:8000/api/v1/health
 # {"status":"ok","version":"0.0.1","env":"development","checks":{"api":"ok"},"providers":[],"data_sources":[]}
 ```
 
-### 5.2 Frontend (`apps/web`)
+Stop infra when done:
 
 ```bash
-cd apps/web
-pnpm install
-pnpm dev                                                  # http://localhost:3000
+make infra-down              # stop postgres + cube
 ```
 
-Open http://localhost:3000. The page fetches `/health` from the API and renders
-the status card. If the API is down you'll see an "API unreachable" alert.
+> `make infra` publishes Postgres on `localhost:5432` and Cube on
+> `localhost:4000` — exactly what the local API/web default to, so no env
+> changes are needed. The api/web services live behind the compose `full`
+> profile, so a bare `docker compose up` starts only the backing services.
 
-> The backend must be running (step 5.1) for the status page to show
-> *Operational*. CORS is preconfigured for `http://localhost:3000`.
+---
 
-### 5.3 Cube (optional in M0)
+## 5. Alternative: run everything in Docker (demo / prod-like)
 
-Cube has no models yet in M0. It only needs to run for the full Docker demo.
-To run it standalone, use `cp cube/.env.example cube/.env` and Docker, or rely
-on `make up`.
+No reload, but boots the whole system with one command — good for a quick demo
+or to sanity-check the container builds.
+
+```bash
+make up          # postgres + cube + api + web  →  http://localhost:3000
+make down        # stop and remove containers
+make logs        # tail logs from all services
+```
+
+> First `make up` pulls/builds images, so it takes a few minutes.
 
 ---
 

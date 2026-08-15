@@ -2,32 +2,41 @@
 # Usage: make <target>
 
 .DEFAULT_GOAL := help
-.PHONY: help up down logs fmt lint typecheck test api-dev web-dev install
+.PHONY: help infra infra-down infra-logs up down logs fmt lint typecheck test api-dev web-dev install
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-## ---------- Full stack (Docker Compose) ----------
-up: ## Boot the full stack (postgres + api + web + cube)
-	docker compose up --build
+## ---------- Recommended dev: infra in Docker, apps in watch mode ----------
+infra: ## Start backing services only (postgres + cube) in the background
+	docker compose up -d postgres cube
 
-down: ## Stop the stack and remove containers
-	docker compose down
+infra-down: ## Stop backing services
+	docker compose stop postgres cube
 
-logs: ## Tail logs from all services
-	docker compose logs -f
+infra-logs: ## Tail infra logs (postgres + cube)
+	docker compose logs -f postgres cube
 
-## ---------- Local dev (without Docker) ----------
 install: ## Install backend + frontend dependencies
 	cd apps/api && uv sync
 	cd apps/web && pnpm install
 
-api-dev: ## Run the API locally with reload
+api-dev: ## Run the API locally with hot reload (needs `make infra`)
 	cd apps/api && uv run uvicorn nomadata.main:app --reload --host 0.0.0.0 --port 8000
 
-web-dev: ## Run the web client locally
+web-dev: ## Run the web client locally with HMR (needs api-dev)
 	cd apps/web && pnpm dev
+
+## ---------- Full stack in Docker (demo / prod-like, no reload) ----------
+up: ## Boot EVERYTHING in Docker (postgres + cube + api + web)
+	docker compose --profile full up --build
+
+down: ## Stop the full stack and remove containers
+	docker compose --profile full down
+
+logs: ## Tail logs from all services
+	docker compose --profile full logs -f
 
 ## ---------- Quality ----------
 fmt: ## Format all code

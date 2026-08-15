@@ -18,6 +18,9 @@ services:
       retries: 10
 
   api:
+    # In the "full" profile only — for local dev, run the API with `make api-dev`
+    # (hot reload) against infra started by `make infra`.
+    profiles: ["full"]
     build:
       context: ./apps/api
     environment:
@@ -37,6 +40,9 @@ services:
           target: /app/nomadata
 
   web:
+    # In the "full" profile only — for local dev, run the client with
+    # `make web-dev` (HMR) against infra + a locally-run API.
+    profiles: ["full"]
     build:
       context: ./apps/web
     environment:
