@@ -37,13 +37,25 @@ def create_app() -> FastAPI:
         summary="Model-agnostic AI client for conversational BI.",
         lifespan=lifespan,
     )
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # In development, accept any localhost/127.0.0.1 port so the client keeps
+    # working when Next.js falls back to :3001 etc. (port 3000 already in use).
+    # Production uses the explicit allowlist only.
+    if settings.env == "development":
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     app.include_router(v1_router, prefix="/api/v1")
     return app
 

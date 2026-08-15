@@ -23,3 +23,11 @@ def test_health_registries_wired_but_empty() -> None:
     body = client.get("/api/v1/health").json()
     assert body["providers"] == []
     assert body["data_sources"] == []
+
+
+def test_dev_cors_allows_any_localhost_port() -> None:
+    # Next.js may fall back to :3001 when :3000 is taken — dev CORS must allow it.
+    resp = client.get(
+        "/api/v1/health", headers={"Origin": "http://localhost:3001"}
+    )
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:3001"
