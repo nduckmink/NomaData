@@ -36,4 +36,15 @@ def build_data_source(
             user=user,
             password=password,
         )
+    if normalized in ("sqlserver", "mssql"):
+        from nomadata.connectors.sqlserver import SQLServerDataSource
+
+        return SQLServerDataSource(
+            name=name,
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
+        )
     raise ConfigurationError(f"Unsupported data source kind: {kind!r}")

@@ -11,6 +11,7 @@ dependencies = [
     "pydantic-settings>=2.6",
     "structlog>=24.4",
     "aiomysql>=0.2.0",
+    "pymssql>=2.3.0",
 ]
 
 [dependency-groups]
@@ -54,7 +55,7 @@ strict_equality = true
 
 # Third-party DB drivers without type stubs.
 [[tool.mypy.overrides]]
-module = ["aiomysql.*"]
+module = ["aiomysql.*", "pymssql", "pymssql.*"]
 ignore_missing_imports = true
 
 # ---------- Pytest ----------
@@ -109,6 +110,8 @@ forbidden_modules = [
     "sqlalchemy",
     "aiomysql",
     "pymysql",
+    "pymssql",
+    "pyodbc",
 ]
 
 [[tool.importlinter.contracts]]
