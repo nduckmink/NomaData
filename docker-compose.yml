@@ -1,35 +1,46 @@
 name: nomadata
 
+# All credentials and host ports are configurable via environment variables
+# (read from the root .env file). Defaults keep a zero-config dev experience —
+# `pnpm infra` / `pnpm up` work out of the box. Override in .env for anything
+# real. Container-internal ports (5432, 4000, 8000, 3000) are fixed; only the
+# *published* host ports are parameterized.
+
 services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: nomadata
-      POSTGRES_PASSWORD: nomadata
-      POSTGRES_DB: nomadata
+      POSTGRES_USER: ${POSTGRES_USER:-nomadata}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nomadata}
+      POSTGRES_DB: ${POSTGRES_DB:-nomadata}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nomadata"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nomadata}"]
       interval: 5s
       timeout: 3s
       retries: 10
 
   api:
-    # In the "full" profile only — for local dev, run the API with `make api-dev`
-    # (hot reload) against infra started by `make infra`.
+    # In the "full" profile only — for local dev, run the API with `pnpm api:dev`
+    # (hot reload) against infra started by `pnpm infra`.
     profiles: ["full"]
     build:
       context: ./apps/api
     environment:
-      NOMADATA_ENV: development
-      NOMADATA_DATABASE_URL: postgresql://nomadata:nomadata@postgres:5432/nomadata
+      NOMADATA_ENV: ${NOMADATA_ENV:-development}
+      NOMADATA_DATABASE_URL: postgresql://${POSTGRES_USER:-nomadata}:${POSTGRES_PASSWORD:-nomadata}@postgres:5432/${POSTGRES_DB:-nomadata}
       NOMADATA_CUBE_URL: http://cube:4000
-      NOMADATA_CORS_ORIGINS: http://localhost:3000
+      NOMADATA_CORS_ORIGINS: ${NOMADATA_CORS_ORIGINS:-http://localhost:3000}
+      # AI provider — forwarded from .env so secrets never live in this file.
+      NOMADATA_AI_PROVIDER: ${NOMADATA_AI_PROVIDER:-openai_compatible}
+      NOMADATA_AI_BASE_URL: ${NOMADATA_AI_BASE_URL:-https://api.openai.com/v1}
+      NOMADATA_AI_API_KEY: ${NOMADATA_AI_API_KEY:-}
+      NOMADATA_AI_MODEL: ${NOMADATA_AI_MODEL:-gpt-4o-mini}
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,14 +52,14 @@ services:
 
   web:
     # In the "full" profile only — for local dev, run the client with
-    # `make web-dev` (HMR) against infra + a locally-run API.
+    # `pnpm web:dev` (HMR) against infra + a locally-run API.
     profiles: ["full"]
     build:
       context: ./apps/web
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     ports:
-      - "3000:3000"
+      - "${WEB_PORT:-3000}:3000"
     depends_on:
       - api
 
@@ -58,12 +69,12 @@ services:
       CUBEJS_DEV_MODE: "true"
       CUBEJS_DB_TYPE: postgres
       CUBEJS_DB_HOST: postgres
-      CUBEJS_DB_NAME: nomadata
-      CUBEJS_DB_USER: nomadata
-      CUBEJS_DB_PASS: nomadata
-      CUBEJS_API_SECRET: dev-secret-change-me
+      CUBEJS_DB_NAME: ${POSTGRES_DB:-nomadata}
+      CUBEJS_DB_USER: ${POSTGRES_USER:-nomadata}
+      CUBEJS_DB_PASS: ${POSTGRES_PASSWORD:-nomadata}
+      CUBEJS_API_SECRET: ${CUBE_API_SECRET:-dev-secret-change-me}
     ports:
-      - "4000:4000"
+      - "${CUBE_PORT:-4000}:4000"
     volumes:
       - ./cube:/cube/conf
     depends_on:

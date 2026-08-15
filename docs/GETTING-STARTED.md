@@ -184,6 +184,7 @@ docs/     plans, architecture, this guide
 | Status page shows "API unreachable" | Start the API (`pnpm api:dev`); check it's on port 8000. |
 | Port already in use | Stop the other process or change the port flag. |
 | `pnpm: command not found` | `npm install -g pnpm`. |
+| Changed `POSTGRES_*` but DB still uses old creds | Postgres applies them only on an empty volume — wipe with `pnpm infra:reset`. |
 | Docker build slow first time | Expected — images pull/build once, then cache. |
 | Line-ending / CRLF warnings on commit | Expected on Windows; `.gitattributes` normalizes to LF. |
 | `create-next-app` left a nested `.git` in `apps/web` | Delete it before `git add` so it isn't tracked as a gitlink. |
