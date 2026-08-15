@@ -17,18 +17,26 @@ reads the API health endpoint end-to-end. See
 | **pnpm**       | ≥ 9     | Web package manager              |
 | **Python**     | ≥ 3.11  | API backend                      |
 | **uv**         | latest  | Python deps + venv               |
-| **Docker**     | latest  | Full-stack run (optional)        |
+| **Docker**     | latest  | Backing services (Postgres, Cube)|
 
-Install the two package managers if you don't have them:
+Install the toolchain if you don't have it:
 
 ```bash
-npm install -g pnpm          # pnpm
-pip install uv               # uv  (or: https://docs.astral.sh/uv/)
+npm install -g pnpm                                    # pnpm (web)
+
+# uv (API) — the official installer puts uv on your PATH:
+#   Windows (PowerShell):
+#     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+#   macOS / Linux:
+#     curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-> **Windows note:** if `uv` is installed via `pip install --user` it may not be
-> on your PATH. Either add it to PATH, or run it as `python -m uv ...`
-> everywhere this guide (and the Makefile) says `uv ...`.
+> **`make` is NOT required.** Every command below runs through `pnpm` scripts
+> defined in the root `package.json`. (A `Makefile` exists as an optional
+> alternative on macOS/Linux/WSL.)
+>
+> After installing uv, open a **new terminal** so `uv` is on your PATH
+> (`uv --version` should print a version). It installs to `~/.local/bin`.
 
 ---
 
@@ -73,20 +81,20 @@ This is the pnpm-monorepo pattern — infra is disposable, apps stay on watch.
 First time only — install deps:
 
 ```bash
-make install                 # uv sync (api) + pnpm install (web)
+pnpm setup                   # pnpm install (web) + uv sync (api)
 ```
 
 Then, each session:
 
 ```bash
 # 1. Backing services in the background (postgres + cube)
-make infra
+pnpm infra
 
 # 2. API with hot reload            (terminal A)
-make api-dev                 # http://localhost:8000 — reloads on .py changes
+pnpm api:dev                 # http://localhost:8000 — reloads on .py changes
 
 # 3. Web client with HMR            (terminal B)
-make web-dev                 # http://localhost:3000 — reloads on .tsx changes
+pnpm web:dev                 # http://localhost:3000 — reloads on .tsx changes
 ```
 
 Open http://localhost:3000 — the **System Status** page fetches `/health` and
@@ -100,10 +108,10 @@ curl http://localhost:8000/api/v1/health
 Stop infra when done:
 
 ```bash
-make infra-down              # stop postgres + cube
+pnpm infra:down              # stop postgres + cube
 ```
 
-> `make infra` publishes Postgres on `localhost:5432` and Cube on
+> `pnpm infra` publishes Postgres on `localhost:5432` and Cube on
 > `localhost:4000` — exactly what the local API/web default to, so no env
 > changes are needed. The api/web services live behind the compose `full`
 > profile, so a bare `docker compose up` starts only the backing services.
@@ -116,42 +124,30 @@ No reload, but boots the whole system with one command — good for a quick demo
 or to sanity-check the container builds.
 
 ```bash
-make up          # postgres + cube + api + web  →  http://localhost:3000
-make down        # stop and remove containers
-make logs        # tail logs from all services
+pnpm up          # postgres + cube + api + web  →  http://localhost:3000
+pnpm down        # stop and remove containers
+pnpm logs        # tail logs from all services
 ```
 
-> First `make up` pulls/builds images, so it takes a few minutes.
+> First `pnpm up` pulls/builds images, so it takes a few minutes.
 
 ---
 
 ## 6. Quality commands
 
-From the repo root (each also runnable per-app):
+From the repo root:
 
 ```bash
-make fmt         # format backend (ruff) + frontend (prettier)
-make lint        # ruff + import-linter (architecture) + eslint
-make typecheck   # mypy + tsc
-make test        # pytest + web tests
+pnpm lint        # ruff + import-linter (api) + eslint (web)
+pnpm typecheck   # mypy (api) + tsc (web)
+pnpm test        # pytest
+pnpm fmt         # ruff format + prettier
+pnpm build:web   # production build of the web client
 ```
 
-Per-app equivalents:
-
-```bash
-# Backend
-cd apps/api
-uv run pytest                    # tests
-uv run ruff check .              # lint
-uv run lint-imports              # architecture boundary contracts
-uv run mypy nomadata             # types
-
-# Frontend
-cd apps/web
-pnpm exec eslint app lib         # lint
-pnpm exec tsc --noEmit           # types
-pnpm build                       # production build
-```
+Scoped variants: `pnpm lint:api`, `pnpm lint:web`, `pnpm typecheck:api`,
+`pnpm typecheck:web`, `pnpm test:api`. These wrap `uv` (api) and `pnpm --filter`
+(web), so you can also run the underlying tools directly from each app dir.
 
 > **Architecture is enforced, not just documented.** `lint-imports` fails the
 > check if any module outside `providers/` imports an LLM SDK, any module
@@ -183,8 +179,9 @@ docs/     plans, architecture, this guide
 
 | Symptom | Fix |
 | ------- | --- |
-| `uv: command not found` | Use `python -m uv ...`, or add uv to PATH. |
-| Status page shows "API unreachable" | Start the backend (step 5.1); check it's on port 8000. |
+| `make: command not found` (Windows) | Expected — use the `pnpm` scripts (§4). `make` is optional. |
+| `uv: command not found` | Open a new terminal after installing uv; ensure `~/.local/bin` is on PATH. |
+| Status page shows "API unreachable" | Start the API (`pnpm api:dev`); check it's on port 8000. |
 | Port already in use | Stop the other process or change the port flag. |
 | `pnpm: command not found` | `npm install -g pnpm`. |
 | Docker build slow first time | Expected — images pull/build once, then cache. |

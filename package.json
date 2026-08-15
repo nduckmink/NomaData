@@ -1,0 +1,33 @@
+{
+  "name": "nomadata",
+  "version": "0.0.1",
+  "private": true,
+  "description": "NomaData — model-agnostic AI client for conversational BI",
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "setup": "pnpm install && pnpm api:sync",
+    "api:sync": "cd apps/api && uv sync",
+
+    "infra": "docker compose up -d postgres cube",
+    "infra:down": "docker compose stop postgres cube",
+    "infra:logs": "docker compose logs -f postgres cube",
+
+    "api:dev": "cd apps/api && uv run uvicorn nomadata.main:app --reload --host 0.0.0.0 --port 8000",
+    "web:dev": "pnpm --filter nomadata-web dev",
+
+    "up": "docker compose --profile full up --build",
+    "down": "docker compose --profile full down",
+    "logs": "docker compose --profile full logs -f",
+
+    "fmt": "cd apps/api && uv run ruff format . && cd ../web && pnpm exec prettier --write .",
+    "lint": "pnpm lint:api && pnpm lint:web",
+    "lint:api": "cd apps/api && uv run ruff check . && uv run lint-imports",
+    "lint:web": "pnpm --filter nomadata-web exec eslint app lib",
+    "typecheck": "pnpm typecheck:api && pnpm typecheck:web",
+    "typecheck:api": "cd apps/api && uv run mypy nomadata",
+    "typecheck:web": "pnpm --filter nomadata-web exec tsc --noEmit",
+    "test": "pnpm test:api",
+    "test:api": "cd apps/api && uv run pytest",
+    "build:web": "pnpm --filter nomadata-web build"
+  }
+}

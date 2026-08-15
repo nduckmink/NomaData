@@ -162,19 +162,19 @@ The initial architecture is centered around four layers:
 
 ## Development
 
-Run the full stack with Docker:
+Everything runs through `pnpm` scripts — no `make` required.
 
 ```bash
 cp .env.example .env
-make up          # postgres + api + web + cube  →  http://localhost:3000
+pnpm setup        # install web + api deps (pnpm + uv)
+pnpm infra        # postgres + cube in Docker (background)
+pnpm api:dev      # terminal A — API with hot reload   →  :8000
+pnpm web:dev      # terminal B — web with HMR           →  :3000
 ```
 
-Or run locally without Docker (two terminals):
+Or boot the whole stack in Docker: `pnpm up`.
 
-```bash
-cd apps/api && uv sync && uv run uvicorn nomadata.main:app --reload --port 8000
-cd apps/web && pnpm install && pnpm dev
-```
+> Requires **pnpm** and **uv** on your PATH (see the guide for install steps).
 
 **Full setup, commands, and troubleshooting → [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).**
 
