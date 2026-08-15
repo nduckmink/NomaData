@@ -27,6 +27,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ThemeToggle } from "@/components/theme-toggle"
 import { cn } from "@/lib/utils"
 
 type LoadState = "loading" | "ok" | "error"
@@ -73,19 +74,22 @@ export default function Page() {
     <main className="flex min-h-svh items-center justify-center bg-background p-6">
       <div className="flex w-full max-w-lg flex-col gap-6">
         <header className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
-            {/* Transparent variant: the orange mark reads on both themes. */}
-            <Image
-              src="/logo-transparent.svg"
-              alt=""
-              width={32}
-              height={32}
-              className="size-8"
-            />
-            <span className="text-2xl font-semibold tracking-tight">
-              NomaData
-            </span>
-            <Badge variant="outline">v{health?.version ?? "0.0.1"}</Badge>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              {/* Transparent variant: the orange mark reads on both themes. */}
+              <Image
+                src="/logo-transparent.svg"
+                alt=""
+                width={32}
+                height={32}
+                className="size-8"
+              />
+              <span className="text-2xl font-semibold tracking-tight">
+                NomaData
+              </span>
+              <Badge variant="outline">v{health?.version ?? "0.0.1"}</Badge>
+            </div>
+            <ThemeToggle />
           </div>
           <p className="text-sm text-muted-foreground">
             Know My Data. — Foundation skeleton (M0)

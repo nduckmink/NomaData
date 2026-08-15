@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { ThemeToggle } from "@/components/theme-toggle"
 import { cn } from "@/lib/utils"
 
 import { AddDataSourceDialog } from "./add-data-source"
@@ -157,6 +158,7 @@ export default function SchemaPage() {
             <AddDataSourceDialog
               onCreated={(name) => void refreshSources(name)}
             />
+            <ThemeToggle />
           </div>
         </div>
         {status === "ready" && (
