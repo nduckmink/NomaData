@@ -4,9 +4,6 @@
 !.env.example
 *.local
 
-# ---------- Data source connections (may contain credentials) ----------
-/data_sources.json
-
 # ---------- Python ----------
 __pycache__/
 *.py[cod]

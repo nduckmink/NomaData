@@ -41,11 +41,6 @@ class Settings(BaseSettings):
     ai_api_key: str = ""
     ai_model: str = "gpt-4o-mini"
 
-    # Data sources are defined in data_sources.json (see nomadata.data_sources),
-    # NOT here — connection config is kept out of env/secrets. This only points
-    # at the file; empty = default location (data_sources.json at the repo root).
-    data_sources_file: str = ""
-
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:

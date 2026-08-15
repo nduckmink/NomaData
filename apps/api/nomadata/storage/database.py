@@ -13,6 +13,19 @@ import asyncpg
 from nomadata.core.errors import ConfigurationError
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS data_sources (
+    name TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    database TEXT NOT NULL,
+    username TEXT NOT NULL DEFAULT '',
+    password TEXT NOT NULL DEFAULT '',
+    password_env TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS semantic_models (
     id BIGSERIAL PRIMARY KEY,
     source_id TEXT NOT NULL,

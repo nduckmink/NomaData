@@ -52,6 +52,10 @@ class Registry:
         except KeyError as exc:
             raise DataSourceNotFoundError(name) from exc
 
+    def unregister_data_source(self, name: str) -> DataSource | None:
+        """Remove and return a registered data source (None if absent)."""
+        return self._data_sources.pop(name, None)
+
     def data_source_names(self) -> list[str]:
         return sorted(self._data_sources)
 

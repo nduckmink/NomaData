@@ -15,12 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from nomadata.api.v1.router import router as v1_router
 from nomadata.config import get_settings
-from nomadata.connectors import build_data_source
-from nomadata.core.interfaces.data_source import DataSource
 from nomadata.core.registry import get_registry
-from nomadata.data_sources import load_data_sources
+from nomadata.datasource_manager import DataSourceManager
 from nomadata.logging import configure_logging, get_logger
 from nomadata.semantic.service import SemanticModelService
+from nomadata.storage.data_source_repo import DataSourceRepository
 from nomadata.storage.database import Database
 from nomadata.storage.semantic_repo import SemanticRepository
 
@@ -32,44 +31,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log = get_logger()
     log.info("nomadata.startup", env=settings.env, version=settings.version)
 
-    # M1: register data sources declared in data_sources.json.
+    # Data sources and semantic models live in the app DB. Connect it, register
+    # the semantic service, and load persisted data source connections. Degrade
+    # gracefully if the app DB is unavailable — the API still serves /health.
     registry = get_registry()
-    sources: list[DataSource] = []
-    for cfg in load_data_sources(settings.data_sources_file or None):
-        source = build_data_source(
-            cfg.kind,
-            name=cfg.name,
-            host=cfg.host,
-            port=cfg.port,
-            database=cfg.database,
-            user=cfg.user,
-            password=cfg.resolve_password(),
-        )
-        registry.register_data_source(source.name, source)
-        sources.append(source)
-        log.info("nomadata.datasource.registered", name=source.name, kind=cfg.kind)
-
-    # M2: connect the app metadata DB and register the semantic model service.
-    # Degrade gracefully if the app DB is unavailable — the rest of the API runs.
     database: Database | None = None
+    manager: DataSourceManager | None = None
     if settings.database_url:
         database = Database(settings.database_url)
         try:
             await database.connect()
             registry.set_semantic_model(SemanticModelService(SemanticRepository(database)))
-            log.info("nomadata.appdb.connected")
+            manager = DataSourceManager(DataSourceRepository(database), registry)
+            count = await manager.load_all()
+            app.state.datasource_manager = manager
+            log.info("nomadata.appdb.connected", data_sources=count)
         except Exception as exc:  # noqa: BLE001 - degrade, don't crash the API
             log.warning("nomadata.appdb.unavailable", error=str(exc))
             database = None
+            manager = None
 
     yield
 
+    if manager is not None:
+        await manager.close_all()
     if database is not None:
         await database.close()
-    for source in sources:
-        close = getattr(source, "close", None)
-        if close is not None:
-            await close()
     log.info("nomadata.shutdown")
 
 

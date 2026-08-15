@@ -7,6 +7,7 @@ cross-cutting act. Grouped by architectural boundary.
 
 from __future__ import annotations
 
+import os
 from enum import StrEnum
 from typing import Any
 
@@ -62,6 +63,48 @@ class ProviderCapabilities(BaseModel):
 # ======================================================================
 # Data boundary
 # ======================================================================
+
+
+class DataSourceConfig(BaseModel):
+    """A data source connection definition (persisted in the app DB)."""
+
+    name: str
+    kind: str
+    host: str = "localhost"
+    port: int = 3306
+    database: str
+    user: str = ""
+    password: str = ""
+    # If set, read the password from this env var instead of `password`.
+    password_env: str | None = None
+
+    def resolve_password(self) -> str:
+        if self.password_env:
+            return os.environ.get(self.password_env, "")
+        return self.password
+
+    def to_info(self) -> DataSourceInfo:
+        return DataSourceInfo(
+            name=self.name,
+            kind=self.kind,
+            host=self.host,
+            port=self.port,
+            database=self.database,
+            user=self.user,
+            uses_password_env=bool(self.password_env),
+        )
+
+
+class DataSourceInfo(BaseModel):
+    """Safe view of a data source — never includes the password."""
+
+    name: str
+    kind: str
+    host: str
+    port: int
+    database: str
+    user: str
+    uses_password_env: bool
 
 
 class ConnectionState(StrEnum):
