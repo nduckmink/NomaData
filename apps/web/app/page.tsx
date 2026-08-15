@@ -1,5 +1,6 @@
 "use client"
 
+import Image from "next/image"
 import Link from "next/link"
 import { useCallback, useEffect, useState } from "react"
 import {
@@ -73,6 +74,14 @@ export default function Page() {
       <div className="flex w-full max-w-lg flex-col gap-6">
         <header className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
+            {/* Transparent variant: the orange mark reads on both themes. */}
+            <Image
+              src="/logo-transparent.svg"
+              alt=""
+              width={32}
+              height={32}
+              className="size-8"
+            />
             <span className="text-2xl font-semibold tracking-tight">
               NomaData
             </span>

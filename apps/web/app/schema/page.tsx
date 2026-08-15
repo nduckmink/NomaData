@@ -31,38 +31,57 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
 
 type Status = "loading" | "error" | "empty" | "ready"
 
 export default function SchemaPage() {
   const [status, setStatus] = useState<Status>("loading")
+  const [sources, setSources] = useState<string[]>([])
   const [source, setSource] = useState<string | null>(null)
   const [catalog, setCatalog] = useState<DatabaseCatalog | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [query, setQuery] = useState("")
 
+  // Load the list of sources once, and select the first.
   useEffect(() => {
     const controller = new AbortController()
     void (async () => {
       try {
-        const sources = await getDataSources(controller.signal)
-        if (sources.length === 0) {
-          if (!controller.signal.aborted) setStatus("empty")
+        const names = await getDataSources(controller.signal)
+        if (controller.signal.aborted) return
+        if (names.length === 0) {
+          setStatus("empty")
           return
         }
-        const cat = await getSchema(sources[0], controller.signal)
-        if (controller.signal.aborted) return
-        setSource(sources[0])
-        setCatalog(cat)
-        setSelected(cat.tables[0]?.name ?? null)
-        setStatus("ready")
+        setSources(names)
+        setSource(names[0])
       } catch {
         if (!controller.signal.aborted) setStatus("error")
       }
     })()
     return () => controller.abort()
   }, [])
+
+  // Load the schema whenever the selected source changes.
+  useEffect(() => {
+    if (!source) return
+    const controller = new AbortController()
+    void (async () => {
+      try {
+        const cat = await getSchema(source, controller.signal)
+        if (controller.signal.aborted) return
+        setCatalog(cat)
+        setSelected(cat.tables[0]?.name ?? null)
+        setQuery("")
+        setStatus("ready")
+      } catch {
+        if (!controller.signal.aborted) setStatus("error")
+      }
+    })()
+    return () => controller.abort()
+  }, [source])
 
   const tables = useMemo(() => catalog?.tables ?? [], [catalog])
   const filtered = useMemo(
@@ -74,7 +93,6 @@ export default function SchemaPage() {
     () => tables.find((t) => t.name === selected) ?? null,
     [tables, selected]
   )
-
   const totals = useMemo(() => {
     const columns = tables.reduce((n, t) => n + t.columns.length, 0)
     const fks = tables.reduce((n, t) => n + t.foreign_keys.length, 0)
@@ -83,19 +101,36 @@ export default function SchemaPage() {
 
   return (
     <main className="mx-auto flex min-h-svh w-full max-w-6xl flex-col gap-6 p-6">
-      <header className="flex flex-col gap-2">
+      <header className="flex flex-col gap-3">
         <Link
           href="/"
           className="text-xs text-muted-foreground hover:text-foreground"
         >
           ← System status
         </Link>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
             <RiDatabase2Line className="size-6 text-muted-foreground" />
             Schema
           </span>
-          {source && <Badge variant="outline">{source}</Badge>}
+          {sources.length > 0 && (
+            <ToggleGroup
+              type="single"
+              value={source ?? ""}
+              onValueChange={(v) => {
+                if (v && v !== source) {
+                  setStatus("loading")
+                  setSource(v)
+                }
+              }}
+            >
+              {sources.map((s) => (
+                <ToggleGroupItem key={s} value={s} className="font-mono">
+                  {s}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          )}
         </div>
         {status === "ready" && (
           <div className="flex gap-6 text-sm text-muted-foreground">
@@ -124,10 +159,10 @@ export default function SchemaPage() {
           <RiDatabase2Line />
           <AlertTitle>No data source configured</AlertTitle>
           <AlertDescription>
-            Set <code className="font-mono">NOMADATA_DS_*</code> in your{" "}
-            <code className="font-mono">.env</code> (see{" "}
-            <code className="font-mono">.env.example</code>) and restart the
-            API.
+            Add a connection to{" "}
+            <code className="font-mono">data_sources.json</code> (see{" "}
+            <code className="font-mono">data_sources.example.json</code>) and
+            restart the API.
           </AlertDescription>
         </Alert>
       )}
@@ -147,7 +182,7 @@ export default function SchemaPage() {
             <ScrollArea className="h-[60svh] rounded-none border">
               <ul className="flex flex-col">
                 {filtered.map((t) => (
-                  <li key={t.name}>
+                  <li key={`${t.schema_name}.${t.name}`}>
                     <TableListItem
                       table={t}
                       active={t.name === selected}
