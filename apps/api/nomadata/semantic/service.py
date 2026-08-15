@@ -52,6 +52,9 @@ class SemanticModelService(SemanticModel):
     async def list_versions(self, source_id: str) -> list[SemanticModelVersion]:
         return await self._repo.list_versions(source_id)
 
+    async def delete(self, source_id: str) -> int:
+        return await self._repo.delete(source_id)
+
     async def resolve_metric(self, source_id: str, name: str) -> MetricDefinition:
         graph = await self.load(source_id)
         for metric in graph.metrics:

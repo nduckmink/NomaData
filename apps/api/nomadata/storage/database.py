@@ -37,6 +37,16 @@ CREATE TABLE IF NOT EXISTS semantic_models (
 );
 CREATE INDEX IF NOT EXISTS ix_semantic_models_source
     ON semantic_models (source_id, version DESC);
+
+CREATE TABLE IF NOT EXISTS ai_config (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    provider TEXT NOT NULL DEFAULT 'openai_compatible',
+    base_url TEXT NOT NULL DEFAULT '',
+    api_key TEXT NOT NULL DEFAULT '',
+    api_key_env TEXT,
+    model TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 

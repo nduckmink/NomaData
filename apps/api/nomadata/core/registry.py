@@ -25,6 +25,7 @@ from nomadata.core.interfaces.semantic_model import SemanticModel
 class Registry:
     def __init__(self) -> None:
         self._providers: dict[str, AIProvider] = {}
+        self._active_provider: AIProvider | None = None
         self._data_sources: dict[str, DataSource] = {}
         self._query_engine: QueryEngine | None = None
         self._semantic_model: SemanticModel | None = None
@@ -41,6 +42,15 @@ class Registry:
 
     def provider_names(self) -> list[str]:
         return sorted(self._providers)
+
+    def set_active_provider(self, provider: AIProvider | None) -> None:
+        """Set (or clear) the currently active AI provider. Set live when the
+        user saves AI config; cleared when the config is removed."""
+        self._active_provider = provider
+
+    def active_provider(self) -> AIProvider | None:
+        """The active AI provider, or None if AI is unconfigured (heuristic only)."""
+        return self._active_provider
 
     # ---- Data sources ----
     def register_data_source(self, name: str, source: DataSource) -> None:

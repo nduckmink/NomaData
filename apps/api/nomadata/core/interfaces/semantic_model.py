@@ -39,5 +39,9 @@ class SemanticModel(ABC):
         """List stored versions for a source, newest first."""
 
     @abstractmethod
+    async def delete(self, source_id: str) -> int:
+        """Delete all semantic versions for a source. Returns rows removed."""
+
+    @abstractmethod
     async def resolve_metric(self, source_id: str, name: str) -> MetricDefinition:
         """Resolve a metric in a source's published model to its definition."""

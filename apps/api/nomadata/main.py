@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from nomadata.ai_provider_manager import AIProviderManager
 from nomadata.api.v1.router import router as v1_router
 from nomadata.config import get_settings
 from nomadata.core.errors import DataConnectionError
@@ -21,6 +22,7 @@ from nomadata.core.registry import get_registry
 from nomadata.datasource_manager import DataSourceManager
 from nomadata.logging import configure_logging, get_logger
 from nomadata.semantic.service import SemanticModelService
+from nomadata.storage.ai_config_repo import AIConfigRepository
 from nomadata.storage.data_source_repo import DataSourceRepository
 from nomadata.storage.database import Database
 from nomadata.storage.semantic_repo import SemanticRepository
@@ -39,6 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     registry = get_registry()
     database: Database | None = None
     manager: DataSourceManager | None = None
+    ai_manager: AIProviderManager | None = None
     if settings.database_url:
         database = Database(settings.database_url)
         try:
@@ -47,16 +50,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             manager = DataSourceManager(DataSourceRepository(database), registry)
             count = await manager.load_all()
             app.state.datasource_manager = manager
-            log.info("nomadata.appdb.connected", data_sources=count)
+            # AI provider config lives in the app DB (editable in the UI). Without
+            # a key the semantic suggester falls back to its heuristic baseline.
+            ai_manager = AIProviderManager(AIConfigRepository(database), registry, settings)
+            ai_info = await ai_manager.load()
+            app.state.ai_manager = ai_manager
+            log.info(
+                "nomadata.appdb.connected",
+                data_sources=count,
+                ai_configured=ai_info is not None and ai_info.configured,
+            )
         except Exception as exc:  # noqa: BLE001 - degrade, don't crash the API
             log.warning("nomadata.appdb.unavailable", error=str(exc))
             database = None
             manager = None
+            ai_manager = None
 
     yield
 
     if manager is not None:
         await manager.close_all()
+    if ai_manager is not None:
+        await ai_manager.close()
     if database is not None:
         await database.close()
     log.info("nomadata.shutdown")

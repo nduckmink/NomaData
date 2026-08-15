@@ -6,9 +6,14 @@ persisted in the app database, versioned.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
-from nomadata.core.errors import SemanticModelNotConfiguredError
+from nomadata.core.errors import (
+    DataSourceNotFoundError,
+    SemanticModelNotConfiguredError,
+)
+from nomadata.core.interfaces.ai_provider import AIProvider
+from nomadata.core.interfaces.data_source import DataSource
 from nomadata.core.interfaces.semantic_model import SemanticModel
 from nomadata.core.models import (
     PublishResult,
@@ -16,6 +21,7 @@ from nomadata.core.models import (
     SemanticModelVersion,
 )
 from nomadata.core.registry import get_registry
+from nomadata.semantic.suggester import SemanticSuggester
 
 router = APIRouter(prefix="/datasources/{name}/semantic", tags=["semantic"])
 
@@ -27,12 +33,28 @@ def _service() -> SemanticModel:
         raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
-@router.get("", response_model=SemanticGraph)
-async def get_semantic(name: str) -> SemanticGraph:
-    graph = await _service().get_draft(name)
-    if graph is None:
-        raise HTTPException(status_code=404, detail=f"No semantic model for {name!r}")
-    return graph
+def _source(name: str) -> DataSource:
+    try:
+        return get_registry().get_data_source(name)
+    except DataSourceNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Data source not found: {name!r}") from None
+
+
+def _ai_provider() -> AIProvider | None:
+    """The active AI provider, or None if AI is unconfigured (heuristic only)."""
+    return get_registry().active_provider()
+
+
+@router.get("", response_model=SemanticGraph | None)
+async def get_semantic(name: str) -> SemanticGraph | None:
+    """The latest draft for a source, or ``null`` if none exists yet.
+
+    "No model yet" is an ordinary empty state, so it returns 200 with a null
+    body — not 404. A 404 here means the data *source* itself is unknown (a real
+    error), which is kept distinct so it can't be swallowed as "just empty"."""
+    service = _service()
+    _source(name)  # 404 only when the data source truly doesn't exist
+    return await service.get_draft(name)
 
 
 @router.put("", response_model=SemanticGraph)
@@ -49,3 +71,38 @@ async def publish_semantic(name: str, graph: SemanticGraph) -> PublishResult:
 @router.get("/versions", response_model=list[SemanticModelVersion])
 async def list_versions(name: str) -> list[SemanticModelVersion]:
     return await _service().list_versions(name)
+
+
+@router.delete("", status_code=204)
+async def delete_semantic(name: str) -> Response:
+    """Delete a source's semantic model (all versions)."""
+    await _service().delete(name)
+    return Response(status_code=204)
+
+
+@router.post("/enrich", response_model=SemanticGraph)
+async def enrich_semantic(name: str, graph: SemanticGraph) -> SemanticGraph:
+    """AI-improve the business names/descriptions/definitions of a given graph,
+    keeping tables/columns/formulas exact. The caller merges the result (e.g.
+    fills only blanks). Requires a configured AI provider."""
+    provider = _ai_provider()
+    if provider is None:
+        raise HTTPException(
+            status_code=409,
+            detail="AI provider not configured — set one in Settings.",
+        )
+    suggester = SemanticSuggester(provider)
+    return await suggester.enrich(graph.model_copy(update={"source_id": name}))
+
+
+@router.post("/suggest", response_model=SemanticGraph)
+async def suggest_semantic(name: str, use_ai: bool = True) -> SemanticGraph:
+    """Introspect the source schema and propose a draft semantic model.
+
+    Uses AI enrichment when a provider is configured (``use_ai=true``, default),
+    otherwise the heuristic baseline. The result is a *suggestion* — it is not
+    saved; a human reviews it (PUT) and publishes it separately."""
+    catalog = await _source(name).inspect_schema()
+    suggester = SemanticSuggester(_ai_provider())
+    graph = await suggester.suggest(catalog, use_ai=use_ai)
+    return graph.model_copy(update={"source_id": name})

@@ -71,6 +71,15 @@ class SemanticRepository:
             )
         return _to_graph(row)
 
+    async def delete(self, source_id: str) -> int:
+        """Delete every version for a source. Returns the number of rows removed."""
+        async with self._db.pool.acquire() as conn:
+            status = await conn.execute(
+                "DELETE FROM semantic_models WHERE source_id=$1", source_id
+            )
+        # asyncpg returns a tag like "DELETE 3".
+        return int(status.split()[-1])
+
     async def list_versions(self, source_id: str) -> list[SemanticModelVersion]:
         async with self._db.pool.acquire() as conn:
             rows = await conn.fetch(

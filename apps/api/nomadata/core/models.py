@@ -60,6 +60,59 @@ class ProviderCapabilities(BaseModel):
     max_context_tokens: int | None = None
 
 
+class AIProviderConfig(BaseModel):
+    """AI provider configuration (persisted in the app DB, editable in the UI).
+
+    A single active configuration. The key is stored plaintext for now (dev,
+    like data source passwords); set ``api_key_env`` to read it from the
+    environment instead. Encryption at rest lands in Phase 6.
+    """
+
+    provider: str = "openai_compatible"
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str = ""
+    api_key_env: str | None = None
+    model: str = "gpt-4o-mini"
+
+    def resolve_api_key(self) -> str:
+        if self.api_key_env:
+            return os.environ.get(self.api_key_env, "")
+        return self.api_key
+
+    def to_info(self) -> AIProviderInfo:
+        key = self.resolve_api_key()
+        return AIProviderInfo(
+            provider=self.provider,
+            base_url=self.base_url,
+            model=self.model,
+            configured=bool(key),
+            uses_api_key_env=bool(self.api_key_env),
+            key_hint=_mask_key(key),
+        )
+
+
+def _mask_key(key: str) -> str | None:
+    """First 5 + 8 dots + last 3, e.g. ``sk-or••••••••abc``. A hint for the UI,
+    never the secret. Short keys are fully masked so we never reveal most of one."""
+    if not key:
+        return None
+    if len(key) < 12:
+        return "•" * 8
+    return f"{key[:5]}{'•' * 8}{key[-3:]}"
+
+
+class AIProviderInfo(BaseModel):
+    """Safe view of the AI config — never includes the API key, only a hint."""
+
+    provider: str
+    base_url: str
+    model: str
+    configured: bool  # a usable key is present
+    uses_api_key_env: bool
+    # Masked preview of the stored key (first 5 + dots + last 3), or None.
+    key_hint: str | None = None
+
+
 # ======================================================================
 # Data boundary
 # ======================================================================
@@ -142,6 +195,27 @@ class TableInfo(BaseModel):
 class DatabaseCatalog(BaseModel):
     source_id: str
     tables: list[TableInfo] = Field(default_factory=list)
+
+
+class TableSummary(BaseModel):
+    """A row in the paginated table list — no columns, so listing many tables
+    stays cheap. Fetch ``TableInfo`` for one table when it is selected."""
+
+    schema_name: str = "public"
+    name: str
+    column_count: int = 0
+    foreign_key_count: int = 0
+
+
+class TablePage(BaseModel):
+    items: list[TableSummary] = Field(default_factory=list)
+    # Matches for the current search — drives "more to load?" for the list.
+    total: int = 0
+    # Whole-catalog counts, unaffected by the search filter — for header
+    # stats that shouldn't jump around while the user types.
+    total_tables: int = 0
+    total_columns: int = 0
+    total_relationships: int = 0
 
 
 class ProfileTarget(BaseModel):
@@ -271,6 +345,9 @@ class SemanticGraph(BaseModel):
     relationships: list[Relationship] = Field(default_factory=list)
     version: int = 1
     published: bool = False
+    # How this draft was produced: "ai" (LLM-enriched) or "heuristic" (rule-based).
+    # A suggestion — never a guarantee; a human still reviews and publishes.
+    provenance: str = "heuristic"
 
 
 class PublishResult(BaseModel):
@@ -283,6 +360,22 @@ class SemanticModelVersion(BaseModel):
     version: int
     status: str  # "draft" | "published"
     created_at: str
+
+
+class SemanticModelSummary(BaseModel):
+    """One row of the cross-source semantic overview — status + shape per source,
+    including sources that have no model yet (so the UI can offer 'generate')."""
+
+    source_id: str
+    kind: str | None = None  # data source engine, for the UI logo
+    has_model: bool = False
+    status: str = "none"  # none | draft | published
+    latest_version: int | None = None
+    published_version: int | None = None
+    provenance: str | None = None  # ai | heuristic
+    entity_count: int = 0
+    metric_count: int = 0
+    relationship_count: int = 0
 
 
 # ======================================================================
