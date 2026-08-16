@@ -55,3 +55,4 @@ docker-compose.override.yml
 
 # ---------- Test Data ----------
 /test/data/*
+/docs/plans
