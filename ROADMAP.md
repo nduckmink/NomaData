@@ -228,7 +228,7 @@ Profile selected columns:
 * [ ] Numeric distribution
 * [x] Sample values
 * [ ] Date ranges
-* [ ] Potential categorical fields
+* [x] Potential categorical fields
 
 ## Acceptance Criteria
 

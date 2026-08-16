@@ -15,6 +15,7 @@ from typing import Any
 
 import aiomysql
 
+from nomadata.connectors.profiling import detect_categorical
 from nomadata.core.errors import DataConnectionError
 from nomadata.core.interfaces.data_source import DataSource
 from nomadata.core.models import (
@@ -182,14 +183,16 @@ class MySQLDataSource(DataSource):
             f"SELECT DISTINCT {column} AS v FROM {table} WHERE {column} IS NOT NULL LIMIT 5"
         )
         distinct = agg.get("distinct_count")
+        distinct_count = int(distinct) if distinct is not None else None
         return ColumnProfile(
             table=target.table,
             column=target.column,
             null_fraction=(nulls / total) if total else None,
-            distinct_count=int(distinct) if distinct is not None else None,
+            distinct_count=distinct_count,
             min_value=_to_jsonable(agg.get("minv")),
             max_value=_to_jsonable(agg.get("maxv")),
             sample_values=[_to_jsonable(row["v"]) for row in sample_rows],
+            is_categorical=detect_categorical(distinct_count, total),
         )
 
     async def execute(self, plan: ExecutionPlan) -> QueryResult:

@@ -232,6 +232,8 @@ class ColumnProfile(BaseModel):
     min_value: Any | None = None
     max_value: Any | None = None
     sample_values: list[Any] = Field(default_factory=list)
+    # Low-cardinality relative to row count → a good dimension / enum candidate.
+    is_categorical: bool | None = None
 
 
 # ======================================================================
