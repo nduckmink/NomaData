@@ -178,7 +178,7 @@ Or boot the whole stack in Docker: `pnpm up`.
 
 **Full setup, commands, and troubleshooting → [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).**
 
-See also: [Vision](VISION.md) · [Roadmap](ROADMAP.md) · [M0 Foundation plan](docs/M0-FOUNDATION.md) · [Architecture](docs/ARCHITECTURE.md).
+See also: [Vision](VISION.md) · [Roadmap](ROADMAP.md) · [Architecture](docs/ARCHITECTURE.md).
 
 ## Status
 
