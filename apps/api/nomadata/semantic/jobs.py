@@ -30,17 +30,29 @@ class SemanticJobRunner:
         self._registry = registry
         self._semantic = semantic
         self._jobs: dict[str, GenerationJob] = {}
+        self._active: dict[str, GenerationJob] = {}  # source_id -> running job
         self._tasks: set[asyncio.Task[None]] = set()
 
     def get(self, job_id: str) -> GenerationJob | None:
         return self._jobs.get(job_id)
 
+    def active_for(self, source_id: str) -> GenerationJob | None:
+        """The running job for a source, if any — lets the client resume watching
+        after navigating away, and stops a second job for the same source."""
+        return self._active.get(source_id)
+
     def start_generate(self, source_id: str, use_ai: bool) -> GenerationJob:
+        existing = self._active.get(source_id)
+        if existing is not None:
+            return existing  # one build per source — don't start a duplicate
         job = self._new(source_id, "generate")
         self._spawn(job, self._run_generate(job, source_id, use_ai))
         return job
 
     def start_enhance(self, source_id: str) -> GenerationJob:
+        existing = self._active.get(source_id)
+        if existing is not None:
+            return existing
         job = self._new(source_id, "enhance")
         self._spawn(job, self._run_enhance(job, source_id))
         return job
@@ -48,6 +60,7 @@ class SemanticJobRunner:
     def _new(self, source_id: str, kind: str) -> GenerationJob:
         job = GenerationJob(id=uuid.uuid4().hex, source_id=source_id, kind=kind)
         self._jobs[job.id] = job
+        self._active[source_id] = job
         return job
 
     def _spawn(self, job: GenerationJob, coro: _Coro) -> None:
@@ -63,6 +76,9 @@ class SemanticJobRunner:
             job.status = JobStatus.error
             job.error = str(exc)
             log.warning("semantic.job.failed", job=job.id, kind=job.kind, error=str(exc))
+        finally:
+            if self._active.get(job.source_id) is job:
+                del self._active[job.source_id]
 
     @staticmethod
     def _progress(job: GenerationJob) -> Callable[[int, int], None]:

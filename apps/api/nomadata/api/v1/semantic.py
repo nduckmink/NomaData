@@ -116,6 +116,13 @@ async def start_enhance(request: Request, name: str) -> GenerationJob:
     return _jobs(request).start_enhance(name)
 
 
+@router.get("/job", response_model=GenerationJob | None)
+async def active_job(request: Request, name: str) -> GenerationJob | None:
+    """The build job currently running for this source, or null — lets the client
+    resume watching after navigating away."""
+    return _jobs(request).active_for(name)
+
+
 @router.get("/jobs/{job_id}", response_model=GenerationJob)
 async def get_job(request: Request, name: str, job_id: str) -> GenerationJob:
     job = _jobs(request).get(job_id)

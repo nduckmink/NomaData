@@ -331,6 +331,18 @@ export async function getJob(
   )
 }
 
+/** The build job currently running for a source, or null — used to resume
+ *  watching after the client navigated away. */
+export async function getActiveJob(
+  name: string,
+  signal?: AbortSignal
+): Promise<GenerationJob | null> {
+  return getJSON<GenerationJob | null>(
+    `/api/v1/datasources/${encodeURIComponent(name)}/semantic/job`,
+    signal
+  )
+}
+
 export interface SemanticModelSummary {
   source_id: string
   kind?: string | null

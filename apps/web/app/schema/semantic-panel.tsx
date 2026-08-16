@@ -18,6 +18,7 @@ import {
   type ColumnInfo,
   deleteSemantic,
   type GenerationJob,
+  getActiveJob,
   getAIConfig,
   getJob,
   getSchema,
@@ -157,18 +158,90 @@ export function SemanticPanel({ source }: { source: string }) {
     [source]
   )
 
+  const sleep = (ms: number, signal: AbortSignal) =>
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ms)
+      signal.addEventListener("abort", () => {
+        clearTimeout(timer)
+        resolve()
+      })
+    })
+
+  // Poll a running build job to completion, showing the loading state; reveal
+  // the saved draft when done. Used both to watch a job we just started and to
+  // resume watching one that was already running on remount.
+  const watchJob = useCallback(
+    async (initial: GenerationJob) => {
+      jobAbort.current?.abort()
+      const controller = new AbortController()
+      jobAbort.current = controller
+      const signal = controller.signal
+      setStatus("generating")
+      setProgress({ done: initial.done, total: initial.total })
+      let job = initial
+      try {
+        while (!signal.aborted) {
+          if (job.status === "done") {
+            await load()
+            return
+          }
+          if (job.status === "error") {
+            toast.error(job.error ?? "Generation failed")
+            await load()
+            return
+          }
+          await sleep(1000, signal)
+          if (signal.aborted) return
+          job = await getJob(source, job.id, signal)
+          if (signal.aborted) return
+          setProgress({ done: job.done, total: job.total })
+        }
+      } catch (e) {
+        if (!signal.aborted) {
+          toast.error(e instanceof Error ? e.message : "Generation failed")
+          await load()
+        }
+      } finally {
+        setProgress(null)
+      }
+    },
+     
+    [source, load]
+  )
+
+  // On mount / source change: if a build job is already running for this source,
+  // resume watching it (loading + progress); otherwise load the saved draft.
   useEffect(() => {
     const controller = new AbortController()
     void (async () => {
+      try {
+        const active = await getActiveJob(source, controller.signal)
+        if (controller.signal.aborted) return
+        if (active && active.status === "running") {
+          await watchJob(active)
+          return
+        }
+      } catch {
+        // Fall through to a normal load.
+      }
       await load(controller.signal)
     })()
     return () => controller.abort()
-  }, [load])
+  }, [source, load, watchJob])
 
   // Generate = one server-side job (heuristic + AI enrichment when configured).
   // The panel shows a loading state while it runs and reveals the finished model
-  // in one go — no heuristic-then-AI flicker.
-  const generate = () => void runJob(() => startGenerate(source, aiConfigured))
+  // in one go. If a build is already running for this source the server returns
+  // it, so this never starts a duplicate.
+  const generate = () =>
+    void (async () => {
+      try {
+        await watchJob(await startGenerate(source, aiConfigured))
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Generation failed")
+        await load()
+      }
+    })()
 
   const save = () =>
     void run("save", async () => {
@@ -187,63 +260,16 @@ export function SemanticPanel({ source }: { source: string }) {
       await load()
     })
 
-  // AI helper: improve business names/descriptions/definitions. Runs in small
-  // batches (a whole-model call is slow and overflows the model's output on a
-  // large schema), reporting progress and surviving a failed batch. Only blank
-  // or still-default (heuristic-generated) fields are replaced — anything you
-  // typed is kept.
   // Re-run AI enrichment on the current draft as a background job (keeps edits).
-  const enhance = () => void runJob(() => startEnhance(source))
-
-  const sleep = (ms: number, signal: AbortSignal) =>
-    new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, ms)
-      signal.addEventListener("abort", () => {
-        clearTimeout(timer)
-        resolve()
-      })
-    })
-
-  // Submit a build job, then poll it. The panel shows a loading state with
-  // progress; when the job is done the saved draft is reloaded — one clean
-  // reveal instead of heuristic-then-AI. The job runs on the server regardless
-  // of whether the client is watching.
-  async function runJob(start: () => Promise<GenerationJob>) {
-    jobAbort.current?.abort()
-    const controller = new AbortController()
-    jobAbort.current = controller
-    const signal = controller.signal
-    setStatus("generating")
-    setProgress({ done: 0, total: 0 })
-    try {
-      const job = await start()
-      if (signal.aborted) return
-      setProgress({ done: job.done, total: job.total })
-      while (!signal.aborted) {
-        await sleep(1000, signal)
-        if (signal.aborted) return
-        const j = await getJob(source, job.id, signal)
-        if (signal.aborted) return
-        setProgress({ done: j.done, total: j.total })
-        if (j.status === "done") {
-          await load()
-          return
-        }
-        if (j.status === "error") {
-          toast.error(j.error ?? "Generation failed")
-          await load()
-          return
-        }
-      }
-    } catch (e) {
-      if (!signal.aborted) {
-        toast.error(e instanceof Error ? e.message : "Generation failed")
+  const enhance = () =>
+    void (async () => {
+      try {
+        await watchJob(await startEnhance(source))
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Enhance failed")
         await load()
       }
-    } finally {
-      setProgress(null)
-    }
-  }
+    })()
 
   const remove = () =>
     void run("delete", async () => {
@@ -315,12 +341,13 @@ export function SemanticPanel({ source }: { source: string }) {
     [graph]
   )
   const entityNames = useMemo(
-    () => (graph?.entities ?? []).map((e) => e.name).sort(),
+    () => [...new Set((graph?.entities ?? []).map((e) => e.name))].sort(),
     [graph]
   )
   // Metric names, for referencing in a derived metric's expression.
   const metricNames = useMemo(
-    () => (graph?.metrics ?? []).map((m) => m.name).filter(Boolean).sort(),
+    () =>
+      [...new Set((graph?.metrics ?? []).map((m) => m.name).filter(Boolean))].sort(),
     [graph]
   )
 
@@ -351,9 +378,7 @@ export function SemanticPanel({ source }: { source: string }) {
         <RiLoader4Line className="size-6 animate-spin text-accent-brand" />
         <div className="flex flex-col items-center gap-2">
           <span className="text-sm font-medium">
-            {progress && progress.total > 0
-              ? `Building model — ${progress.done}/${progress.total}`
-              : "Building model…"}
+            {pct !== null ? `Building your model… ${pct}%` : "Building your model…"}
           </span>
           {pct !== null && (
             <div className="h-1.5 w-56 overflow-hidden rounded-full bg-border">
@@ -364,8 +389,8 @@ export function SemanticPanel({ source }: { source: string }) {
             </div>
           )}
           <p className="max-w-sm text-xs text-balance text-muted-foreground">
-            Heuristic draft + AI naming. This runs on the server and keeps going
-            if you leave — come back to see the result.
+            This usually takes a minute. You can leave and come back — we&apos;ll
+            keep working on it.
           </p>
         </div>
       </div>
@@ -948,6 +973,10 @@ function MiniSelect({
   className?: string
   empty?: boolean
 }) {
+  // Options can collide by value (e.g. two entities the AI named the same) —
+  // dedupe so React keys stay unique and the list isn't visually doubled.
+  const seen = new Set<string>()
+  const unique = options.filter((o) => !seen.has(o.value) && seen.add(o.value))
   return (
     <select
       value={value}
@@ -961,7 +990,7 @@ function MiniSelect({
       )}
     >
       {placeholder !== undefined && <option value="">{placeholder}</option>}
-      {options.map((o) => (
+      {unique.map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}
         </option>
