@@ -16,9 +16,18 @@ This roadmap describes the planned development path from the initial technical f
 >   MySQL + SQL Server** (the real data in `test/infra`). Verified live: MySQL
 >   124 tables / 1687 cols / 187 FKs; SQL Server 196 tables / 3040 cols / 12 FKs.
 >
-> **Current focus → Phase 2 (Semantic Intelligence): turn the schema into a
-> business semantic model.** Plan: [docs/M2-SEMANTIC.md](docs/M2-SEMANTIC.md)
-> (decisions: Postgres storage · AI-first · full Cube).
+> - Phase 2 — Semantic Intelligence ✅ **complete** (2026-08-16). Publishable,
+>   versioned semantic model in app Postgres; heuristic + AI generation via a
+>   background job (progress + resume); structured base/derived metrics edited in
+>   the UI; cross-source overview. **Full Cube integration**: published model →
+>   generated Cube YAML; Cube reads each source's connection from the app DB via
+>   a `driverFactory` (UI is the single source of truth, multi-source ready);
+>   `POST /datasources/{name}/query` runs analytical queries. Verified live:
+>   MySQL → Cube → `QueryResult` (e.g. `Count_of_Contracts = 1070`).
+>
+> **Current focus → Phase 3 (Conversational Query Engine): AI provider
+> abstraction + agent that turns a question into an AnalyticalQuery over the
+> published model.**
 
 ---
 
@@ -348,15 +357,16 @@ NomaData should treat Cube as an implementation layer rather than exposing Cube-
 
 ## Acceptance Criteria
 
-Given an existing PostgreSQL database:
+Given a connected database (MySQL today):
 
-* [ ] NomaData identifies potential entities.
-* [ ] NomaData suggests dimensions and measures.
-* [ ] NomaData suggests relationships.
-* [ ] NomaData suggests potential metrics.
-* [ ] A human can review and modify the suggestions.
-* [ ] A semantic model can be published.
-* [ ] Cube can execute queries against the published semantic model.
+* [x] NomaData identifies potential entities.
+* [x] NomaData suggests dimensions and measures.
+* [x] NomaData suggests relationships.
+* [x] NomaData suggests potential metrics.
+* [x] A human can review and modify the suggestions.
+* [x] A semantic model can be published.
+* [x] Cube can execute queries against the published semantic model.
+      — verified live: MySQL → Cube → QueryResult (`Count_of_Contracts = 1070`).
 
 ---
 

@@ -23,8 +23,13 @@ from nomadata.core.models import (
     SemanticModelVersion,
 )
 from nomadata.core.registry import get_registry
+from nomadata.config import get_settings
+from nomadata.logging import get_logger
+from nomadata.query.cube_schema import write_cube_model
 from nomadata.semantic.jobs import SemanticJobRunner
 from nomadata.semantic.suggester import SemanticSuggester
+
+log = get_logger()
 
 router = APIRouter(prefix="/datasources/{name}/semantic", tags=["semantic"])
 
@@ -78,7 +83,16 @@ async def put_semantic(name: str, graph: SemanticGraph) -> SemanticGraph:
 
 @router.post("/publish", response_model=PublishResult)
 async def publish_semantic(name: str, graph: SemanticGraph) -> PublishResult:
-    return await _service().publish(graph.model_copy(update={"source_id": name}))
+    pinned = graph.model_copy(update={"source_id": name})
+    result = await _service().publish(pinned)
+    # Compile the published model to Cube so it becomes queryable. Best-effort:
+    # a Cube-generation hiccup must not fail the publish.
+    try:
+        path = write_cube_model(pinned, get_settings().cube_model_dir)
+        log.info("semantic.cube.written", source=name, path=path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("semantic.cube.write_failed", source=name, error=str(exc))
+    return result
 
 
 @router.get("/versions", response_model=list[SemanticModelVersion])

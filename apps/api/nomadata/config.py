@@ -34,6 +34,10 @@ class Settings(BaseSettings):
 
     # Cube semantic/query layer.
     cube_url: str = "http://localhost:4000"
+    # Shared secret to sign the Cube API JWT (matches CUBEJS_API_SECRET).
+    cube_api_secret: str = "dev-secret-change-me"
+    # Where generated Cube model files are written (mounted into the Cube container).
+    cube_model_dir: str = "../../cube/model"
 
     # AI provider (interface only in M0 — not called yet).
     ai_provider: str = "openai_compatible"

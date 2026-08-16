@@ -35,6 +35,9 @@ next-env.d.ts
 # ---------- Cube ----------
 cube/.env
 .cubestore/
+# Generated on publish from the published semantic model — not source.
+cube/model/*.yml
+!cube/model/.gitkeep
 
 # ---------- Editors / OS ----------
 .vscode/*

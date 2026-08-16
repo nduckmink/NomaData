@@ -21,6 +21,7 @@ from nomadata.core.errors import DataConnectionError
 from nomadata.core.registry import get_registry
 from nomadata.datasource_manager import DataSourceManager
 from nomadata.logging import configure_logging, get_logger
+from nomadata.query.cube import CubeQueryEngine
 from nomadata.semantic.jobs import SemanticJobRunner
 from nomadata.semantic.service import SemanticModelService
 from nomadata.storage.ai_config_repo import AIConfigRepository
@@ -40,6 +41,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # the semantic service, and load persisted data source connections. Degrade
     # gracefully if the app DB is unavailable — the API still serves /health.
     registry = get_registry()
+    # Cube query engine — holds config only; run() fails cleanly if Cube is down.
+    registry.set_query_engine(
+        CubeQueryEngine(settings.cube_url, settings.cube_api_secret)
+    )
     database: Database | None = None
     manager: DataSourceManager | None = None
     ai_manager: AIProviderManager | None = None

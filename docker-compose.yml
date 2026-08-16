@@ -33,6 +33,9 @@ services:
       NOMADATA_ENV: ${NOMADATA_ENV:-development}
       NOMADATA_DATABASE_URL: postgresql://${POSTGRES_USER:-nomadata}:${POSTGRES_PASSWORD:-nomadata}@postgres:5432/${POSTGRES_DB:-nomadata}
       NOMADATA_CUBE_URL: http://cube:4000
+      NOMADATA_CUBE_API_SECRET: ${CUBE_API_SECRET:-dev-secret-change-me}
+      # Publish writes generated Cube models here; the cube service reads them.
+      NOMADATA_CUBE_MODEL_DIR: /cube/model
       NOMADATA_CORS_ORIGINS: ${NOMADATA_CORS_ORIGINS:-http://localhost:3000}
       # AI provider — forwarded from .env so secrets never live in this file.
       NOMADATA_AI_PROVIDER: ${NOMADATA_AI_PROVIDER:-openai_compatible}
@@ -41,6 +44,9 @@ services:
       NOMADATA_AI_MODEL: ${NOMADATA_AI_MODEL:-gpt-4o-mini}
     ports:
       - "${API_PORT:-8000}:8000"
+    volumes:
+      # Share the Cube model dir so `publish` can write cubes the cube service reads.
+      - ./cube:/cube
     depends_on:
       postgres:
         condition: service_healthy
@@ -67,16 +73,22 @@ services:
     image: cubejs/cube:latest
     environment:
       CUBEJS_DEV_MODE: "true"
-      CUBEJS_DB_TYPE: postgres
-      CUBEJS_DB_HOST: postgres
-      CUBEJS_DB_NAME: ${POSTGRES_DB:-nomadata}
-      CUBEJS_DB_USER: ${POSTGRES_USER:-nomadata}
-      CUBEJS_DB_PASS: ${POSTGRES_PASSWORD:-nomadata}
       CUBEJS_API_SECRET: ${CUBE_API_SECRET:-dev-secret-change-me}
+      # No pre-aggregations yet — stop the refresh scheduler from hammering
+      # driverFactory with the "default" data source.
+      CUBEJS_SCHEDULED_REFRESH_TIMER: "false"
+      # Cube reads each data source's connection from the app DB at query time
+      # (cube/cube.js driverFactory) — the UI is the single source of truth, so
+      # there is no static CUBEJS_DB_* here. This URL points Cube at the app
+      # Postgres so it can read the `data_sources` table.
+      CUBEJS_APP_DB_URL: postgresql://${POSTGRES_USER:-nomadata}:${POSTGRES_PASSWORD:-nomadata}@postgres:5432/${POSTGRES_DB:-nomadata}
     ports:
       - "${CUBE_PORT:-4000}:4000"
     volumes:
       - ./cube:/cube/conf
+    extra_hosts:
+      # So Cube can reach a data source the app configured as localhost/127.0.0.1.
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
