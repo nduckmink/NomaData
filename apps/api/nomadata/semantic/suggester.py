@@ -15,7 +15,11 @@ Two layers, both producing the same artifact:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
+from collections.abc import Callable
+from typing import Any
 
 from nomadata.core.interfaces.ai_provider import AIProvider
 from nomadata.core.models import (
@@ -25,8 +29,10 @@ from nomadata.core.models import (
     Dimension,
     EnrichmentHints,
     Entity,
+    EntityHint,
     Message,
     MetricDefinition,
+    MetricHint,
     MetricKind,
     Relationship,
     Role,
@@ -36,6 +42,35 @@ from nomadata.core.models import (
 from nomadata.logging import get_logger
 
 log = get_logger()
+
+# Server-side enrichment batching (mirrors what the client used to do): small
+# batches keep each AI call fast and valid; low concurrency avoids piling up
+# connections on a rate-limited provider.
+_ENRICH_BATCH = 12
+_ENRICH_CONCURRENCY = 2
+_ENRICH_BATCH_TIMEOUT_S = 45.0
+
+
+def _chunk(items: list[Any], size: int) -> list[list[Any]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _is_default_entity_name(e: Entity) -> bool:
+    return not e.name.strip() or e.name == _humanize(e.table)
+
+
+def _is_default_entity_desc(e: Entity) -> bool:
+    d = e.description or ""
+    return not d.strip() or d == f"Business entity backed by table {e.table}."
+
+
+def _is_default_metric_name(m: MetricDefinition) -> bool:
+    return not m.name.strip() or m.name.endswith(" Count")
+
+
+def _is_default_metric_desc(m: MetricDefinition) -> bool:
+    d = m.description or ""
+    return not d.strip() or bool(re.match(r"^Number of .+ records\.$", d))
 
 _NUMERIC_TYPES = (
     "int",
@@ -161,6 +196,88 @@ class SemanticSuggester:
             ),
         ]
         return await self._provider.generate_structured(messages, EnrichmentHints)
+
+    async def enrich_batched(
+        self,
+        graph: SemanticGraph,
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> SemanticGraph:
+        """AI-improve names/descriptions across the whole graph, in small
+        bounded-concurrency batches, then merge — replacing only blank or still
+        heuristic-default fields (edits are kept). Reports progress as batches
+        finish. No-op (returns the graph unchanged) without a provider."""
+        if self._provider is None:
+            return graph
+
+        entity_batches = _chunk(list(graph.entities), _ENRICH_BATCH)
+        metric_batches = _chunk(list(graph.metrics), _ENRICH_BATCH)
+        total = len(entity_batches) + len(metric_batches)
+        done = 0
+        ent_hints: dict[str, EntityHint] = {}
+        met_hints: dict[str, MetricHint] = {}
+        sem = asyncio.Semaphore(_ENRICH_CONCURRENCY)
+
+        def _tick() -> None:
+            nonlocal done
+            done += 1
+            if on_progress is not None:
+                on_progress(done, total)
+
+        async def _run(entities: list[Entity], metrics: list[MetricDefinition]) -> None:
+            async with sem:
+                try:
+                    hints = await asyncio.wait_for(
+                        self.enrich_hints(
+                            SemanticGraph(
+                                source_id=graph.source_id, entities=entities, metrics=metrics
+                            )
+                        ),
+                        timeout=_ENRICH_BATCH_TIMEOUT_S,
+                    )
+                    for eh in hints.entities:
+                        ent_hints[eh.table] = eh
+                    for mh in hints.metrics:
+                        met_hints[mh.key] = mh
+                except Exception as exc:  # noqa: BLE001 - a failed batch is skipped
+                    log.warning("semantic.enrich.batch_failed", error=str(exc))
+                finally:
+                    _tick()
+
+        await asyncio.gather(
+            *[_run(batch, []) for batch in entity_batches],
+            *[_run([], batch) for batch in metric_batches],
+        )
+
+        entities = []
+        for e in graph.entities:
+            eh = ent_hints.get(e.table)
+            if eh is not None:
+                update: dict[str, Any] = {}
+                if _is_default_entity_name(e) and eh.name.strip():
+                    update["name"] = eh.name
+                if _is_default_entity_desc(e) and eh.description.strip():
+                    update["description"] = eh.description
+                if update:
+                    e = e.model_copy(update=update)
+            entities.append(e)
+
+        metrics = []
+        for m in graph.metrics:
+            mh = met_hints.get(metric_key(m))
+            if mh is not None:
+                update = {}
+                if _is_default_metric_name(m) and mh.name.strip():
+                    update["name"] = mh.name
+                if _is_default_metric_desc(m) and mh.definition.strip():
+                    update["description"] = mh.definition
+                if update:
+                    m = m.model_copy(update=update)
+            metrics.append(m)
+
+        return graph.model_copy(
+            update={"entities": entities, "metrics": metrics, "provenance": "ai"}
+        )
 
     def heuristic(self, catalog: DatabaseCatalog) -> SemanticGraph:
         entities: list[Entity] = []

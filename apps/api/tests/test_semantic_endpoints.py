@@ -25,3 +25,15 @@ def test_delete_semantic_unavailable_without_app_db() -> None:
 
 def test_semantic_overview_unavailable_without_app_db() -> None:
     assert client.get("/api/v1/semantic").status_code == 503
+
+
+def test_generate_job_unavailable_without_app_db() -> None:
+    assert client.post("/api/v1/datasources/nope/semantic/generate").status_code == 503
+
+
+def test_enhance_job_unavailable_without_app_db() -> None:
+    assert client.post("/api/v1/datasources/nope/semantic/enhance").status_code == 503
+
+
+def test_get_job_unavailable_without_app_db() -> None:
+    assert client.get("/api/v1/datasources/nope/semantic/jobs/abc").status_code == 503

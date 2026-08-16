@@ -6,7 +6,7 @@ persisted in the app database, versioned.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from nomadata.core.errors import (
     DataSourceNotFoundError,
@@ -17,14 +17,26 @@ from nomadata.core.interfaces.data_source import DataSource
 from nomadata.core.interfaces.semantic_model import SemanticModel
 from nomadata.core.models import (
     EnrichmentHints,
+    GenerationJob,
     PublishResult,
     SemanticGraph,
     SemanticModelVersion,
 )
 from nomadata.core.registry import get_registry
+from nomadata.semantic.jobs import SemanticJobRunner
 from nomadata.semantic.suggester import SemanticSuggester
 
 router = APIRouter(prefix="/datasources/{name}/semantic", tags=["semantic"])
+
+
+def _jobs(request: Request) -> SemanticJobRunner:
+    runner = getattr(request.app.state, "semantic_jobs", None)
+    if runner is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Semantic jobs unavailable — app database not connected.",
+        )
+    return runner
 
 
 def _service() -> SemanticModel:
@@ -79,6 +91,37 @@ async def delete_semantic(name: str) -> Response:
     """Delete a source's semantic model (all versions)."""
     await _service().delete(name)
     return Response(status_code=204)
+
+
+@router.post("/generate", response_model=GenerationJob)
+async def start_generate(request: Request, name: str, use_ai: bool = True) -> GenerationJob:
+    """Start a background build: heuristic draft + (if AI is configured and
+    ``use_ai``) batched AI enrichment, saved when done. Returns a job to poll —
+    the whole model appears in one reveal, not heuristic-then-AI."""
+    _service()  # 503 if the app DB is down
+    _source(name)  # 404 if the data source is unknown
+    ai = use_ai and _ai_provider() is not None
+    return _jobs(request).start_generate(name, ai)
+
+
+@router.post("/enhance", response_model=GenerationJob)
+async def start_enhance(request: Request, name: str) -> GenerationJob:
+    """Start a background AI re-enrichment of the current draft (keeps edits)."""
+    _service()
+    _source(name)
+    if _ai_provider() is None:
+        raise HTTPException(
+            status_code=409, detail="AI provider not configured — set one in Settings."
+        )
+    return _jobs(request).start_enhance(name)
+
+
+@router.get("/jobs/{job_id}", response_model=GenerationJob)
+async def get_job(request: Request, name: str, job_id: str) -> GenerationJob:
+    job = _jobs(request).get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id!r}")
+    return job
 
 
 @router.post("/enrich", response_model=EnrichmentHints)

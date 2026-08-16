@@ -21,6 +21,7 @@ from nomadata.core.errors import DataConnectionError
 from nomadata.core.registry import get_registry
 from nomadata.datasource_manager import DataSourceManager
 from nomadata.logging import configure_logging, get_logger
+from nomadata.semantic.jobs import SemanticJobRunner
 from nomadata.semantic.service import SemanticModelService
 from nomadata.storage.ai_config_repo import AIConfigRepository
 from nomadata.storage.data_source_repo import DataSourceRepository
@@ -46,7 +47,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         database = Database(settings.database_url)
         try:
             await database.connect()
-            registry.set_semantic_model(SemanticModelService(SemanticRepository(database)))
+            semantic_service = SemanticModelService(SemanticRepository(database))
+            registry.set_semantic_model(semantic_service)
+            app.state.semantic_jobs = SemanticJobRunner(registry, semantic_service)
             manager = DataSourceManager(DataSourceRepository(database), registry)
             count = await manager.load_all()
             app.state.datasource_manager = manager

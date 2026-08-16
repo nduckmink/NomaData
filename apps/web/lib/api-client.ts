@@ -285,6 +285,52 @@ export interface SemanticModelVersion {
   created_at: string
 }
 
+export interface GenerationJob {
+  id: string
+  source_id: string
+  kind: string
+  status: "running" | "done" | "error"
+  done: number
+  total: number
+  error?: string | null
+}
+
+/** Start a background build (heuristic + optional AI enrichment). Poll with
+ *  getJob; when done the draft is saved, reload it with getSemanticDraft. */
+export async function startGenerate(
+  name: string,
+  useAi = true
+): Promise<GenerationJob> {
+  const params = new URLSearchParams({ use_ai: String(useAi) })
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/generate?${params}`,
+    { method: "POST" }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return (await res.json()) as GenerationJob
+}
+
+/** Start a background AI re-enrichment of the current draft. */
+export async function startEnhance(name: string): Promise<GenerationJob> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/enhance`,
+    { method: "POST" }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return (await res.json()) as GenerationJob
+}
+
+export async function getJob(
+  name: string,
+  jobId: string,
+  signal?: AbortSignal
+): Promise<GenerationJob> {
+  return getJSON<GenerationJob>(
+    `/api/v1/datasources/${encodeURIComponent(name)}/semantic/jobs/${encodeURIComponent(jobId)}`,
+    signal
+  )
+}
+
 export interface SemanticModelSummary {
   source_id: string
   kind?: string | null

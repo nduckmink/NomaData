@@ -21,7 +21,7 @@ from nomadata.core.models import (
     ToolCallResponse,
     ToolSpec,
 )
-from nomadata.semantic.suggester import SemanticSuggester
+from nomadata.semantic.suggester import SemanticSuggester, metric_key
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -155,3 +155,66 @@ async def test_use_ai_false_skips_provider() -> None:
     suggester = SemanticSuggester(_FakeProvider(fail=True))
     graph = await suggester.suggest(_catalog(), use_ai=False)
     assert graph.provenance == "heuristic"
+
+
+class _EnrichProvider(AIProvider):
+    """Returns fixed enrichment hints keyed by table/metric-key."""
+
+    @property
+    def name(self) -> str:
+        return "enrich-fake"
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(structured_output=True)
+
+    async def chat(self, messages: list[Message], **opts: Any) -> ChatResponse:
+        raise NotImplementedError
+
+    async def generate_structured(
+        self, messages: list[Message], schema: type[T], **opts: Any
+    ) -> T:
+        return schema.model_validate(
+            {
+                "entities": [
+                    {"table": "customers", "name": "Customer AI", "description": "All customers."},
+                    {"table": "orders", "name": "Order AI", "description": "All orders."},
+                ],
+                "metrics": [
+                    {"key": "count(Customers.*)", "name": "Customer Total", "definition": "n"},
+                    {"key": "count(Orders.*)", "name": "Order Total", "definition": "n"},
+                ],
+            }
+        )
+
+    async def tool_call(
+        self, messages: list[Message], tools: list[ToolSpec], **opts: Any
+    ) -> ToolCallResponse:
+        raise NotImplementedError
+
+
+async def test_enrich_batched_fills_defaults_keeps_edits() -> None:
+    suggester = SemanticSuggester(_EnrichProvider())
+    graph = suggester.heuristic(_catalog())
+    # Edit one entity name so it is no longer the heuristic default.
+    ents = [
+        e.model_copy(update={"name": "My Orders"}) if e.table == "orders" else e
+        for e in graph.entities
+    ]
+    graph = graph.model_copy(update={"entities": ents})
+
+    out = await suggester.enrich_batched(graph)
+
+    by_table = {e.table: e for e in out.entities}
+    assert by_table["customers"].name == "Customer AI"  # default → replaced
+    assert by_table["orders"].name == "My Orders"  # user edit → kept
+    cust_count = next(m for m in out.metrics if metric_key(m) == "count(Customers.*)")
+    assert cust_count.name == "Customer Total"  # metric default name → replaced
+    assert out.provenance == "ai"
+
+
+async def test_enrich_batched_noop_without_provider() -> None:
+    suggester = SemanticSuggester(None)
+    graph = suggester.heuristic(_catalog())
+    out = await suggester.enrich_batched(graph)
+    assert out is graph

@@ -414,6 +414,25 @@ class EnrichmentHints(BaseModel):
     metrics: list[MetricHint] = Field(default_factory=list)
 
 
+class JobStatus(StrEnum):
+    running = "running"
+    done = "done"
+    error = "error"
+
+
+class GenerationJob(BaseModel):
+    """A background build of a semantic model — the client polls it. When it
+    reaches ``done`` the draft is already saved; the client reloads it."""
+
+    id: str
+    source_id: str
+    kind: str = "generate"  # generate | enhance
+    status: JobStatus = JobStatus.running
+    done: int = 0  # batches finished
+    total: int = 0  # total batches (0 = no AI step)
+    error: str | None = None
+
+
 class SemanticModelSummary(BaseModel):
     """One row of the cross-source semantic overview — status + shape per source,
     including sources that have no model yet (so the UI can offer 'generate')."""
