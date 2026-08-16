@@ -3,9 +3,10 @@
 Two layers, both producing the same artifact:
 
 - **Heuristic baseline** (always runs, no key needed): tables with a primary key
-  become entities, numeric columns become measures, categorical/date columns
-  become dimensions, foreign keys become relationships, and each entity gets a
-  ``<Entity> Count`` metric candidate.
+  become entities, categorical/date columns become dimensions, foreign keys
+  become relationships, and each entity gets one lean base metric — a
+  ``<Entity> Count``. SUM/AVG metrics are added by the user (auto-summing every
+  numeric column produces mostly noise: IDs, codes, flags).
 - **AI enrichment** (when an ``AIProvider`` is available): the baseline is handed
   to the model, which returns business names, descriptions and richer metric
   definitions. The AI *proposes* — the output is a draft a human still reviews
@@ -14,15 +15,19 @@ Two layers, both producing the same artifact:
 
 from __future__ import annotations
 
+import json
+
 from nomadata.core.interfaces.ai_provider import AIProvider
 from nomadata.core.models import (
+    Aggregation,
     ColumnInfo,
     DatabaseCatalog,
     Dimension,
+    EnrichmentHints,
     Entity,
-    Measure,
     Message,
     MetricDefinition,
+    MetricKind,
     Relationship,
     Role,
     SemanticGraph,
@@ -83,17 +88,12 @@ def _dimension_for(column: ColumnInfo) -> Dimension:
     )
 
 
-def _measures_for(table: TableInfo, numeric_cols: list[ColumnInfo]) -> list[Measure]:
-    measures: list[Measure] = []
-    for col in numeric_cols:
-        measures.append(
-            Measure(
-                name=f"Total {_humanize(col.name)}",
-                expression=f"SUM({table.name}.{col.name})",
-                description=f"Sum of {col.name} across {table.name}.",
-            )
-        )
-    return measures
+def metric_key(m: MetricDefinition) -> str:
+    """Stable identifier for a metric, used to match AI enrichment back and to
+    dedupe. Must match the frontend's computation."""
+    if m.kind == MetricKind.derived:
+        return f"={m.expression or ''}"
+    return f"{m.aggregation}({m.entity}.{m.column or '*'})"
 
 
 class SemanticSuggester:
@@ -114,15 +114,53 @@ class SemanticSuggester:
                 log.warning("semantic.suggest.ai_failed", error=str(exc))
         return heuristic
 
-    async def enrich(self, graph: SemanticGraph) -> SemanticGraph:
-        """AI-improve business names/descriptions/definitions of an existing
-        graph, keeping tables/columns/formulas exact. Requires a provider."""
+    async def enrich_hints(self, graph: SemanticGraph) -> EnrichmentHints:
+        """Return compact business text (name + description/definition) for each
+        entity and metric — matched back by table/formula. The response echoes
+        no structure, so it stays small and fast even in batches. Requires a
+        provider; callers should send a manageable slice of the graph."""
         if self._provider is None:
             raise RuntimeError("No AI provider configured for enrichment.")
-        enriched = await self._enrich_graph(graph)
-        return enriched.model_copy(
-            update={"source_id": graph.source_id, "provenance": "ai"}
-        )
+
+        entities_in = [
+            {"table": e.table, "columns": [d.column for d in e.dimensions][:12]}
+            for e in graph.entities
+        ]
+        metrics_in = [
+            {
+                "key": metric_key(m),
+                "entity": m.entity,
+                "aggregation": str(m.aggregation) if m.aggregation else None,
+                "column": m.column,
+                "expression": m.expression,
+            }
+            for m in graph.metrics
+        ]
+        messages = [
+            Message(
+                role=Role.system,
+                content=(
+                    "You name and describe objects in a business intelligence "
+                    "semantic model. For each entity (a database table) write a "
+                    "concise business Name and a one-sentence Description. For "
+                    "each metric (an aggregation over a column, or an expression "
+                    "over other metrics) write a business Name and a one-sentence "
+                    "Definition of what it measures. Return ONLY JSON. Echo each "
+                    "entity `table` and metric `key` back EXACTLY as given so it "
+                    "can be matched. Do not invent items."
+                ),
+            ),
+            Message(
+                role=Role.user,
+                content=(
+                    f"Entities: {json.dumps(entities_in, ensure_ascii=False)}\n"
+                    f"Metrics: {json.dumps(metrics_in, ensure_ascii=False)}\n\n"
+                    'Return {"entities":[{"table","name","description"}],'
+                    '"metrics":[{"key","name","definition"}]}.'
+                ),
+            ),
+        ]
+        return await self._provider.generate_structured(messages, EnrichmentHints)
 
     def heuristic(self, catalog: DatabaseCatalog) -> SemanticGraph:
         entities: list[Entity] = []
@@ -137,9 +175,6 @@ class SemanticSuggester:
             if not pk:
                 continue
             pk_set = set(pk)
-            numeric_cols = [
-                c for c in table.columns if _is_numeric(c.data_type) and c.name not in pk_set
-            ]
             dimension_cols = [
                 c
                 for c in table.columns
@@ -150,17 +185,20 @@ class SemanticSuggester:
                 table=table.name,
                 primary_key=pk[0],
                 dimensions=[_dimension_for(c) for c in dimension_cols],
-                measures=_measures_for(table, numeric_cols),
                 description=f"Business entity backed by table {table.name}.",
             )
             entities.append(entity)
 
-            # A universally useful metric candidate: how many of this entity exist.
+            # One lean, always-useful base metric per entity: how many exist.
+            # SUM/AVG over specific columns are added by the user (numeric columns
+            # are mostly IDs/codes/flags, so auto-summing them all is noise).
             metrics.append(
                 MetricDefinition(
                     name=f"{entity.name} Count",
-                    definition=f"Number of {entity.name} records.",
-                    formula=f"COUNT({table.name}.{pk[0]})",
+                    description=f"Number of {entity.name} records.",
+                    kind=MetricKind.base,
+                    entity=entity.name,
+                    aggregation=Aggregation.count,
                 )
             )
 

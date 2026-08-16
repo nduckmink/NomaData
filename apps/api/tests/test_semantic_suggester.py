@@ -8,11 +8,13 @@ from pydantic import BaseModel
 
 from nomadata.core.interfaces.ai_provider import AIProvider
 from nomadata.core.models import (
+    Aggregation,
     ChatResponse,
     ColumnInfo,
     DatabaseCatalog,
     ForeignKey,
     Message,
+    MetricKind,
     ProviderCapabilities,
     SemanticGraph,
     TableInfo,
@@ -63,7 +65,7 @@ def _catalog() -> DatabaseCatalog:
     )
 
 
-async def test_heuristic_builds_entities_measures_dimensions() -> None:
+async def test_heuristic_builds_entities_and_base_metrics() -> None:
     graph = SemanticSuggester().heuristic(_catalog())
 
     assert graph.source_id == "shop"
@@ -73,14 +75,14 @@ async def test_heuristic_builds_entities_measures_dimensions() -> None:
     assert names == {"customers", "orders"}  # event_log skipped (no PK)
 
     orders = next(e for e in graph.entities if e.table == "orders")
-    # amount is numeric → a measure; customer_id is the FK (numeric) → also a measure.
-    measure_exprs = {m.expression for m in orders.measures}
-    assert "SUM(orders.amount)" in measure_exprs
-    # status/varchar → a dimension; id (PK) excluded from both.
+    # status/varchar → a dimension; id (PK) excluded.
     dim_cols = {d.column for d in orders.dimensions}
     assert "status" in dim_cols
     assert "id" not in dim_cols
-    assert all(m.expression != "SUM(orders.id)" for m in orders.measures)
+
+    # Lean baseline: one COUNT metric per entity, no auto SUM-per-column noise.
+    assert all(m.aggregation == Aggregation.count for m in graph.metrics)
+    assert {m.entity for m in graph.metrics} == {"Customers", "Orders"}
 
 
 async def test_heuristic_maps_foreign_keys_to_relationships() -> None:
@@ -95,10 +97,11 @@ async def test_heuristic_maps_foreign_keys_to_relationships() -> None:
 
 async def test_heuristic_adds_count_metric_per_entity() -> None:
     graph = SemanticSuggester().heuristic(_catalog())
-    metric_names = {m.name for m in graph.metrics}
-    assert "Orders Count" in metric_names
     orders_count = next(m for m in graph.metrics if m.name == "Orders Count")
-    assert orders_count.formula == "COUNT(orders.id)"
+    assert orders_count.kind == MetricKind.base
+    assert orders_count.aggregation == Aggregation.count
+    assert orders_count.entity == "Orders"
+    assert orders_count.column is None
 
 
 class _FakeProvider(AIProvider):

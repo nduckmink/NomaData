@@ -16,6 +16,7 @@ from nomadata.core.interfaces.ai_provider import AIProvider
 from nomadata.core.interfaces.data_source import DataSource
 from nomadata.core.interfaces.semantic_model import SemanticModel
 from nomadata.core.models import (
+    EnrichmentHints,
     PublishResult,
     SemanticGraph,
     SemanticModelVersion,
@@ -80,11 +81,12 @@ async def delete_semantic(name: str) -> Response:
     return Response(status_code=204)
 
 
-@router.post("/enrich", response_model=SemanticGraph)
-async def enrich_semantic(name: str, graph: SemanticGraph) -> SemanticGraph:
-    """AI-improve the business names/descriptions/definitions of a given graph,
-    keeping tables/columns/formulas exact. The caller merges the result (e.g.
-    fills only blanks). Requires a configured AI provider."""
+@router.post("/enrich", response_model=EnrichmentHints)
+async def enrich_semantic(name: str, graph: SemanticGraph) -> EnrichmentHints:
+    """Return compact AI business text (name + description/definition) for the
+    entities/metrics in the posted graph, matched back by table/formula. The
+    caller merges it (fills blanks / replaces defaults). Send a manageable slice
+    — the caller batches. Requires a configured AI provider."""
     provider = _ai_provider()
     if provider is None:
         raise HTTPException(
@@ -92,7 +94,7 @@ async def enrich_semantic(name: str, graph: SemanticGraph) -> SemanticGraph:
             detail="AI provider not configured — set one in Settings.",
         )
     suggester = SemanticSuggester(provider)
-    return await suggester.enrich(graph.model_copy(update={"source_id": name}))
+    return await suggester.enrich_hints(graph)
 
 
 @router.post("/suggest", response_model=SemanticGraph)

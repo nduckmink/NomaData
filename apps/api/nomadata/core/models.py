@@ -305,18 +305,48 @@ class Dimension(BaseModel):
     description: str | None = None
 
 
-class Measure(BaseModel):
-    name: str
-    expression: str  # e.g. SUM(payments.amount)
-    description: str | None = None
+class Aggregation(StrEnum):
+    # `count` shadows str.count on a StrEnum — harmless; the ignore quiets mypy.
+    count = "count"  # type: ignore[assignment]
+    count_distinct = "count_distinct"
+    sum = "sum"
+    avg = "avg"
+    min = "min"
+    max = "max"
+
+
+class MetricKind(StrEnum):
+    base = "base"  # aggregation over one entity's column
+    derived = "derived"  # arithmetic over other metrics
 
 
 class MetricDefinition(BaseModel):
+    """A named business number. Structured, not a free SQL string, so the query
+    engine can execute it and the UI can edit it with pickers.
+
+    - ``base``: an ``aggregation`` over ``column`` on ``entity``, with optional
+      ``filters`` (business rules) and a ``time_dimension`` (the date column this
+      metric is measured over — grain is chosen at query time, not here).
+    - ``derived``: an ``expression`` combining other metrics by name, e.g.
+      ``"Revenue / Order Count"``.
+    """
+
     name: str
-    definition: str  # business meaning, in human language
-    formula: str  # e.g. SUM(payments.amount)
+    description: str | None = None
+    kind: MetricKind = MetricKind.base
+
+    # base metric
+    entity: str | None = None  # the entity (its table) this metric aggregates
+    aggregation: Aggregation | None = None
+    column: str | None = None  # column to aggregate; None for count
     filters: list[Filter] = Field(default_factory=list)
     time_dimension: str | None = None
+
+    # derived metric
+    expression: str | None = None  # references other metric names
+
+    # display
+    format: str | None = None  # "currency" | "percent" | "number"
 
 
 class Relationship(BaseModel):
@@ -332,7 +362,6 @@ class Entity(BaseModel):
     table: str
     primary_key: str = "id"
     dimensions: list[Dimension] = Field(default_factory=list)
-    measures: list[Measure] = Field(default_factory=list)
     description: str | None = None
 
 
@@ -360,6 +389,29 @@ class SemanticModelVersion(BaseModel):
     version: int
     status: str  # "draft" | "published"
     created_at: str
+
+
+class EntityHint(BaseModel):
+    """Compact AI enrichment for one entity — business text only, matched back
+    to the model by ``table``. Keeps the enrichment response small and fast."""
+
+    table: str
+    name: str = ""
+    description: str = ""
+
+
+class MetricHint(BaseModel):
+    """Compact AI enrichment for one metric, matched back by ``key`` (a stable
+    identifier the caller computes, e.g. ``sum(Payment.amount)``)."""
+
+    key: str
+    name: str = ""
+    definition: str = ""
+
+
+class EnrichmentHints(BaseModel):
+    entities: list[EntityHint] = Field(default_factory=list)
+    metrics: list[MetricHint] = Field(default_factory=list)
 
 
 class SemanticModelSummary(BaseModel):

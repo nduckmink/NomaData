@@ -221,24 +221,36 @@ export interface Dimension {
   description?: string | null
 }
 
-export interface Measure {
-  name: string
-  expression: string
-  description?: string | null
-}
-
 export interface MetricFilter {
   field: string
   operator: string
   value: unknown
 }
 
+export type Aggregation =
+  | "count"
+  | "count_distinct"
+  | "sum"
+  | "avg"
+  | "min"
+  | "max"
+
+export type MetricKind = "base" | "derived"
+
 export interface MetricDefinition {
   name: string
-  definition: string
-  formula: string
+  description?: string | null
+  kind: MetricKind
+  // base
+  entity?: string | null
+  aggregation?: Aggregation | null
+  column?: string | null
   filters?: MetricFilter[]
   time_dimension?: string | null
+  // derived
+  expression?: string | null
+  // display
+  format?: string | null
 }
 
 export interface Relationship {
@@ -254,7 +266,6 @@ export interface Entity {
   table: string
   primary_key: string
   dimensions: Dimension[]
-  measures: Measure[]
   description?: string | null
 }
 
@@ -377,23 +388,30 @@ export async function suggestSemantic(
   return (await res.json()) as SemanticGraph
 }
 
-/** AI-improve business names/descriptions/definitions of a graph, keeping
- *  tables/columns/formulas exact. The caller decides how to merge (e.g. fill
- *  only blanks). Throws 409 when no AI provider is configured. */
+export interface EnrichmentHints {
+  entities: { table: string; name: string; description: string }[]
+  metrics: { key: string; name: string; definition: string }[]
+}
+
+/** Compact AI business text (name + description/definition) for the entities and
+ *  metrics in `graph`, matched back by table/formula. Send a manageable slice;
+ *  the caller batches. Throws 409 when no AI provider is configured. */
 export async function enrichSemantic(
   name: string,
-  graph: SemanticGraph
-): Promise<SemanticGraph> {
+  graph: SemanticGraph,
+  signal?: AbortSignal
+): Promise<EnrichmentHints> {
   const res = await fetch(
     `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/enrich`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(graph),
+      signal,
     }
   )
   if (!res.ok) throw new Error(await errorDetail(res))
-  return (await res.json()) as SemanticGraph
+  return (await res.json()) as EnrichmentHints
 }
 
 // ---------- AI provider config ----------
