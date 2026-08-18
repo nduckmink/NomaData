@@ -6,6 +6,7 @@ import asyncio
 
 from nomadata.core.interfaces.semantic_model import SemanticModel
 from nomadata.core.models import (
+    Entity,
     JobStatus,
     MetricDefinition,
     PublishResult,
@@ -57,3 +58,66 @@ async def test_generate_dedups_and_tracks_active() -> None:
 async def test_active_for_unknown_source_is_none() -> None:
     runner = SemanticJobRunner(Registry(), _NoopSemantic())
     assert runner.active_for("nope") is None
+
+
+# ----------------------------------------------------------------------
+# Fact-entity selection — which tables a build spends AI on for metrics
+# ----------------------------------------------------------------------
+
+
+def _entity_with(key: str, table: str, dims: list[tuple[str, str]]) -> Entity:
+    from nomadata.core.models import Dimension, DimensionKind
+
+    return Entity(
+        key=key,
+        name=table,
+        table=table,
+        primary_key="id",
+        dimensions=[Dimension(name=c, column=c, kind=DimensionKind(k)) for c, k in dims],
+    )
+
+
+def test_fact_entities_needs_a_date_and_a_real_number() -> None:
+    from nomadata.semantic.jobs import _fact_entities
+
+    fact = _entity_with(
+        "a.transactions",
+        "transactions",
+        [("paid_at", "time"), ("amount", "number"), ("status", "string")],
+    )
+    lookup = _entity_with("a.banks", "banks", [("name", "string")])
+    # A junction table: a date but no measurable number (only foreign keys).
+    junction = _entity_with(
+        "a.role_user", "role_user", [("created_at", "time"), ("role_id", "number")]
+    )
+
+    graph = SemanticGraph(source_id="s", entities=[fact, lookup, junction])
+    picked = {e.key for e in _fact_entities(graph)}
+
+    assert picked == {"a.transactions"}
+
+
+def test_fact_entities_skips_a_table_that_already_has_real_metrics() -> None:
+    from nomadata.core.models import Aggregation, MetricKind
+    from nomadata.semantic.jobs import _fact_entities
+
+    fact = _entity_with(
+        "a.transactions",
+        "transactions",
+        [("paid_at", "time"), ("amount", "number")],
+    )
+    graph = SemanticGraph(
+        source_id="s",
+        entities=[fact],
+        metrics=[
+            MetricDefinition(
+                name="Revenue",
+                kind=MetricKind.base,
+                entity_key="a.transactions",
+                aggregation=Aggregation.sum,
+                column="amount",
+            )
+        ],
+    )
+
+    assert _fact_entities(graph) == []

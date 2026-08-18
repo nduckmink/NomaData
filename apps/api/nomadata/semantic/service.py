@@ -43,8 +43,10 @@ class SemanticModelService(SemanticModel):
     async def get_draft(self, source_id: str) -> SemanticGraph | None:
         return await self._repo.get_latest(source_id)
 
-    async def save_draft(self, graph: SemanticGraph) -> SemanticGraph:
-        return await self._repo.save_draft(graph)
+    async def save_draft(
+        self, graph: SemanticGraph, *, expected_revision: int | None = None
+    ) -> SemanticGraph:
+        return await self._repo.save_draft(graph, expected_revision=expected_revision)
 
     async def publish(self, graph: SemanticGraph) -> PublishResult:
         return await self._repo.publish(graph)

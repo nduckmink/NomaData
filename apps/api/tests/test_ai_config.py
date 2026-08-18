@@ -103,9 +103,7 @@ async def test_clear_deactivates() -> None:
 
 async def test_load_seeds_from_env_when_empty() -> None:
     repo, registry = _FakeRepo(), Registry()
-    settings = get_settings().model_copy(
-        update={"ai_api_key": "env-key", "ai_model": "env-model"}
-    )
+    settings = get_settings().model_copy(update={"ai_api_key": "env-key", "ai_model": "env-model"})
     manager = AIProviderManager(repo, registry, settings)  # type: ignore[arg-type]
     info = await manager.load()
     assert info is not None and info.configured

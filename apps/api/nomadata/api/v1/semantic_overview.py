@@ -16,6 +16,7 @@ from nomadata.core.interfaces.semantic_model import SemanticModel
 from nomadata.core.models import SemanticGraph, SemanticModelSummary
 from nomadata.core.registry import get_registry
 from nomadata.semantic.service import SemanticModelNotFoundError
+from nomadata.semantic.validator import validate_graph
 
 router = APIRouter(prefix="/semantic", tags=["semantic"])
 
@@ -52,6 +53,16 @@ async def semantic_overview(request: Request) -> list[SemanticModelSummary]:
             continue
 
         published = await _published_or_none(service, name)
+        # Structural health only — no catalog, so no database hit. This is the
+        # same check the Publish button runs; here it is a cheap preview of
+        # whether the model would pass. "Still matches the live schema" is a
+        # separate, costlier question (it needs introspection).
+        report = validate_graph(latest)
+        # A draft ahead of what is live: the newest version is a draft, and
+        # either nothing is published or the published version is older.
+        unpublished = not latest.published and (
+            published is None or latest.version > published.version
+        )
         summaries.append(
             SemanticModelSummary(
                 source_id=name,
@@ -64,6 +75,9 @@ async def semantic_overview(request: Request) -> list[SemanticModelSummary]:
                 entity_count=len(latest.entities),
                 metric_count=len(latest.metrics),
                 relationship_count=len(latest.relationships),
+                error_count=len(report.errors),
+                warning_count=len(report.warnings),
+                has_unpublished_changes=unpublished,
             )
         )
 

@@ -1,9 +1,13 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
 import {
   RiAddLine,
-  RiDeleteBinLine,
+  RiArrowRightLine,
+  RiCheckLine,
+  RiErrorWarningLine,
   RiLoader4Line,
   RiNodeTree,
   RiRefreshLine,
@@ -11,12 +15,15 @@ import {
 import { toast } from "sonner"
 
 import {
-  deleteSemantic,
+  getActiveJob,
+  getAIConfig,
+  getJob,
   getSemanticOverview,
-  saveSemanticDraft,
   type SemanticModelSummary,
-  suggestSemantic,
+  startGenerate,
 } from "@/lib/api-client"
+import { BuildModelDialog } from "@/app/schema/build-model-dialog"
+import { DbLogo } from "@/components/icons/db-logo"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -35,8 +42,11 @@ type Status = "idle" | "loading" | "error" | "ready"
 export default function SemanticModelsPage() {
   const [status, setStatus] = useState<Status>("loading")
   const [rows, setRows] = useState<SemanticModelSummary[]>([])
-  // Per-source in-flight action (generate/delete) so only that row shows a spinner.
+  // Per-source in-flight generate, so only that row shows a spinner.
   const [busy, setBusy] = useState<Record<string, boolean>>({})
+  // Whether business context is worth asking for before a build.
+  const [aiConfigured, setAiConfigured] = useState(false)
+  const router = useRouter()
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -53,6 +63,12 @@ export default function SemanticModelsPage() {
     const controller = new AbortController()
     void (async () => {
       await load(controller.signal)
+      try {
+        const cfg = await getAIConfig(controller.signal)
+        if (!controller.signal.aborted) setAiConfigured(!!cfg?.configured)
+      } catch {
+        // Leave false — a build without AI needs no business context.
+      }
     })()
     return () => controller.abort()
   }, [load])
@@ -66,27 +82,26 @@ export default function SemanticModelsPage() {
     }
   }
 
-  const handleGenerate = (name: string) =>
+  // Same background job the per-source editor uses. Building a model means
+  // introspection, profiling and batched AI calls — far too slow to hold a
+  // request open, and a second click must not start a duplicate build.
+  const handleGenerate = (name: string, tables: string[]) =>
     void withBusy(name, async () => {
       try {
-        // Suggest a draft (AI when configured, else heuristic) and persist it.
-        const graph = await suggestSemantic(name)
-        await saveSemanticDraft(name, graph)
-        toast.success(`Draft generated for ${name} (${graph.provenance})`)
+        let job = await startGenerate(name, true, { tables })
+        while (job.status === "running") {
+          await new Promise((r) => setTimeout(r, 1500))
+          const active = await getActiveJob(name)
+          job = active ?? (await getJob(name, job.id))
+        }
+        if (job.status === "error") {
+          toast.error(job.error ?? "Generate failed")
+        } else {
+          toast.success(`Draft generated for ${name}`)
+        }
         await load()
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Generate failed")
-      }
-    })
-
-  const handleDelete = (name: string) =>
-    void withBusy(name, async () => {
-      try {
-        await deleteSemantic(name)
-        toast.success(`Semantic model deleted for ${name}`)
-        await load()
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Delete failed")
       }
     })
 
@@ -94,7 +109,7 @@ export default function SemanticModelsPage() {
     <PageContainer>
       <PageHeader
         title="Semantic Models"
-        description="Every data source and the state of its semantic model. Generate, review, and manage models here, or open a source to edit its model in detail."
+        description="Every data source and the state of its semantic model. Open a source to review and edit its model; generate one for a source that has none."
         actions={
           <Button
             variant="outline"
@@ -136,6 +151,7 @@ export default function SemanticModelsPage() {
               <TableRow>
                 <TableHead>Source</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Health</TableHead>
                 <TableHead className="w-20 text-right">Entities</TableHead>
                 <TableHead className="w-20 text-right">Metrics</TableHead>
                 <TableHead className="w-24 text-right">Relations</TableHead>
@@ -144,17 +160,41 @@ export default function SemanticModelsPage() {
             </TableHeader>
             <TableBody>
               {rows.map((row) => (
-                <TableRow key={row.source_id}>
-                  <TableCell className="font-mono font-medium">
-                    {row.source_id}
-                    {row.kind && (
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        {row.kind}
+                <TableRow
+                  key={row.source_id}
+                  onClick={
+                    row.has_model
+                      ? () =>
+                          router.push(
+                            `/semantic/${encodeURIComponent(row.source_id)}`
+                          )
+                      : undefined
+                  }
+                  className={
+                    row.has_model ? "cursor-pointer hover:bg-wash" : undefined
+                  }
+                >
+                  <TableCell>
+                    <span className="flex items-center gap-2.5">
+                      <span className="flex w-7 shrink-0 justify-center">
+                        {row.kind && (
+                          <DbLogo
+                            engine={row.kind}
+                            monogram={row.source_id.slice(0, 2).toUpperCase()}
+                            className="h-5 w-auto"
+                          />
+                        )}
                       </span>
-                    )}
+                      <span className="font-mono font-medium">
+                        {row.source_id}
+                      </span>
+                    </span>
                   </TableCell>
                   <TableCell>
                     <StatusBadge row={row} />
+                  </TableCell>
+                  <TableCell>
+                    <HealthChip row={row} />
                   </TableCell>
                   <TableCell className="text-right tnum">
                     {row.has_model ? row.entity_count : "—"}
@@ -165,12 +205,15 @@ export default function SemanticModelsPage() {
                   <TableCell className="text-right tnum">
                     {row.has_model ? row.relationship_count : "—"}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell
+                    className="text-right"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <RowActions
                       row={row}
                       busy={!!busy[row.source_id]}
-                      onGenerate={() => handleGenerate(row.source_id)}
-                      onDelete={() => handleDelete(row.source_id)}
+                      aiConfigured={aiConfigured}
+                      onGenerate={(tables) => handleGenerate(row.source_id, tables)}
                     />
                   </TableCell>
                 </TableRow>
@@ -187,19 +230,52 @@ function StatusBadge({ row }: { row: SemanticModelSummary }) {
   if (!row.has_model) {
     return <Badge variant="outline">none</Badge>
   }
-  const version =
-    row.status === "published"
-      ? `v${row.published_version ?? row.latest_version}`
-      : `v${row.latest_version}`
   return (
-    <span className="flex items-center gap-2">
+    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
       <Badge variant={row.status === "published" ? "default" : "secondary"}>
         {row.status}
       </Badge>
-      <span className="text-xs text-muted-foreground tnum">{version}</span>
+      <span className="text-xs text-muted-foreground tnum">
+        v{row.latest_version}
+      </span>
       {row.provenance && (
         <span className="text-xs text-muted-foreground">{row.provenance}</span>
       )}
+      {/* A draft newer than what is live: the work here is not yet queryable. */}
+      {row.has_unpublished_changes && (
+        <span className="rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+          unpublished
+          {row.published_version != null && ` · live v${row.published_version}`}
+        </span>
+      )}
+    </span>
+  )
+}
+
+/** Structural health, from the same validator the Publish button uses. Errors
+ *  block a publish; warnings are advisory; neither means it is ready. */
+function HealthChip({ row }: { row: SemanticModelSummary }) {
+  if (!row.has_model) return <span className="text-muted-foreground">—</span>
+  if (row.error_count > 0) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-destructive">
+        <RiErrorWarningLine className="size-3.5" />
+        {row.error_count} to fix
+      </span>
+    )
+  }
+  if (row.warning_count > 0) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+        <RiErrorWarningLine className="size-3.5" />
+        {row.warning_count} to finish
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+      <RiCheckLine className="size-3.5" />
+      Ready
     </span>
   )
 }
@@ -207,35 +283,46 @@ function StatusBadge({ row }: { row: SemanticModelSummary }) {
 function RowActions({
   row,
   busy,
+  aiConfigured,
   onGenerate,
-  onDelete,
 }: {
   row: SemanticModelSummary
   busy: boolean
-  onGenerate: () => void
-  onDelete: () => void
+  aiConfigured: boolean
+  onGenerate: (tables: string[]) => void
 }) {
+  // A modelled source is opened, not managed from here — rebuild and delete
+  // live inside its editor, one place instead of two.
+  if (row.has_model) {
+    return (
+      <Link
+        href={`/semantic/${encodeURIComponent(row.source_id)}`}
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      >
+        Open
+        <RiArrowRightLine className="size-4" />
+      </Link>
+    )
+  }
   return (
     <div className="flex items-center justify-end gap-2">
-      <Button variant="outline" size="sm" onClick={onGenerate} disabled={busy}>
-        {busy ? (
-          <RiLoader4Line data-icon="inline-start" className="animate-spin" />
-        ) : (
-          <RiAddLine data-icon="inline-start" />
-        )}
-        {row.has_model ? "Regenerate" : "Generate"}
-      </Button>
-      {row.has_model && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onDelete}
-          disabled={busy}
-          aria-label={`Delete semantic model for ${row.source_id}`}
-        >
-          <RiDeleteBinLine />
+      {/* Describe the business, then build — same gate as the editor. */}
+      <BuildModelDialog
+        source={row.source_id}
+        mode="generate"
+        aiConfigured={aiConfigured}
+        disabled={busy}
+        onBuild={onGenerate}
+      >
+        <Button variant="outline" size="sm" disabled={busy}>
+          {busy ? (
+            <RiLoader4Line data-icon="inline-start" className="animate-spin" />
+          ) : (
+            <RiAddLine data-icon="inline-start" />
+          )}
+          Generate
         </Button>
-      )}
+      </BuildModelDialog>
     </div>
   )
 }

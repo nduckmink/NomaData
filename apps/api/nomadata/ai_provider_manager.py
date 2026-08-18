@@ -29,9 +29,7 @@ def _build(cfg: AIProviderConfig) -> OpenAICompatibleProvider:
 
 
 class AIProviderManager:
-    def __init__(
-        self, repo: AIConfigRepository, registry: Registry, settings: Settings
-    ) -> None:
+    def __init__(self, repo: AIConfigRepository, registry: Registry, settings: Settings) -> None:
         self._repo = repo
         self._registry = registry
         self._settings = settings

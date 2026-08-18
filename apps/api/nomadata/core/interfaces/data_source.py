@@ -25,6 +25,13 @@ class DataSource(ABC):
     def name(self) -> str:
         """Stable identifier for this data source."""
 
+    @property
+    def dialect(self) -> str:
+        """SQL dialect, for callers that must quote an identifier themselves
+        (e.g. the metric preview). Concrete with a safe default so adding it
+        never breaks an existing connector."""
+        return "mysql"
+
     @abstractmethod
     async def test_connection(self) -> ConnectionStatus:
         """Verify connectivity."""

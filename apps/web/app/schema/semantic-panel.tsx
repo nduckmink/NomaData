@@ -1,34 +1,46 @@
 "use client"
 
+/**
+ * Per-source semantic model: build, review, edit, validate, publish.
+ *
+ * Scoped to one data source — the cross-source overview lives at /semantic.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   RiAddLine,
+  RiAlertLine,
+  RiCheckLine,
   RiDeleteBinLine,
+  RiEyeOffLine,
   RiLoader4Line,
-  RiMagicLine,
+  RiLockLine,
+  RiLockUnlockLine,
   RiNodeTree,
   RiSaveLine,
   RiSparkling2Line,
+  RiTranslate2,
   RiUploadLine,
 } from "@remixicon/react"
 import { toast } from "sonner"
 
 import {
-  type Aggregation,
-  type ColumnInfo,
   deleteSemantic,
+  type Dimension,
+  type Entity,
   type GenerationJob,
   getActiveJob,
   getAIConfig,
   getJob,
-  getSchema,
   getSemanticDraft,
   type MetricDefinition,
   publishSemantic,
   saveSemanticDraft,
   type SemanticGraph,
-  startEnhance,
+  draftEntity,
   startGenerate,
+  type ValidationIssue,
+  validateSemantic,
 } from "@/lib/api-client"
 import {
   AlertDialog,
@@ -45,21 +57,28 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 
-type Status = "loading" | "error" | "empty" | "generating" | "ready"
+import { BuildModelDialog } from "./build-model-dialog"
+import { MetricEditor, metricIncomplete, recipeSummary } from "./metric-editor"
+import { RelationshipEditor } from "./relationship-editor"
+import { SuggestMetricsButton } from "./suggest-metrics-dialog"
+import {
+  EditArea,
+  EditCell,
+  FormField,
+  isBlank,
+  DraftNotes,
+  MasterDetail,
+  MasterList,
+  PromptBox,
+  TabLabel,
+  ReadOnlyValue,
+  USER,
+} from "./semantic-fields"
 
-const isBlank = (v: string | null | undefined) => !v || v.trim() === ""
+type Status = "loading" | "error" | "empty" | "generating" | "ready"
 
 const humanize = (id: string) =>
   id
@@ -69,65 +88,40 @@ const humanize = (id: string) =>
     .map((w) => (w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
     .join(" ")
 
-/** Stable id for a metric (used for React keys). Matches the backend. */
-const metricKey = (m: MetricDefinition) =>
-  m.kind === "derived"
-    ? `=${m.expression ?? ""}`
-    : `${m.aggregation}(${m.entity}.${m.column ?? "*"})`
+const emptyMetric = (entityKey: string | null): MetricDefinition => ({
+  id: crypto.randomUUID().replace(/-/g, ""),
+  name: "",
+  description: "",
+  kind: "base",
+  entity_key: entityKey,
+  aggregation: "count",
+  column: null,
+  filters: [],
+  time_dimension: null,
+  expression: null,
+  format: null,
+  provenance: USER,
+})
 
-const AGGREGATIONS: Aggregation[] = [
-  "count",
-  "count_distinct",
-  "sum",
-  "avg",
-  "min",
-  "max",
-]
-const FORMATS = ["number", "currency", "percent"] as const
-/** count needs no column; the others aggregate one. */
-const needsColumn = (a: Aggregation | null | undefined) => a === "count_distinct" || a === "sum" || a === "avg" || a === "min" || a === "max"
-const isNumericType = (t: string) =>
-  /int|dec|numeric|float|double|real|money|number/i.test(t)
-const isTemporalType = (t: string) =>
-  /date|time|timestamp|datetime|year/i.test(t)
-
-/** Per-source semantic model: generate, review, edit business names, publish,
- * delete. Scoped to one data source — the global overview lives at /semantic. */
 export function SemanticPanel({ source }: { source: string }) {
   const [status, setStatus] = useState<Status>("loading")
   const [graph, setGraph] = useState<SemanticGraph | null>(null)
+  // The last state the server has. Diffing against it is what lets the list say
+  // *which* rows are unsaved, instead of one flag saying that something is.
+  const [saved, setSaved] = useState<SemanticGraph | null>(null)
   const [dirty, setDirty] = useState(false)
   const [action, setAction] = useState<"save" | "publish" | "delete" | null>(null)
-  // Build-job progress (server-side generate/enhance); drives the loading readout.
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
-  // Columns per table, for the metric column pickers — loaded once from the schema.
-  const [columnsByTable, setColumnsByTable] = useState<Map<string, ColumnInfo[]>>(new Map())
-  // Whether an AI provider is configured — gates auto-enhance on generate.
   const [aiConfigured, setAiConfigured] = useState(false)
-  // Master–detail selection: which entity / metric row is open in the editor.
+  const [issues, setIssues] = useState<ValidationIssue[]>([])
   const [selEntity, setSelEntity] = useState(0)
   const [selMetric, setSelMetric] = useState(0)
-  // Cancel polling of an in-flight build job when the panel unmounts (source
-  // switch). The job itself keeps running server-side.
+  const [entityQuery, setEntityQuery] = useState("")
+  const [metricQuery, setMetricQuery] = useState("")
+
   const jobAbort = useRef<AbortController | null>(null)
   useEffect(() => () => jobAbort.current?.abort(), [])
 
-  // Load the table→columns map once so base metrics can pick a column.
-  useEffect(() => {
-    const controller = new AbortController()
-    void (async () => {
-      try {
-        const catalog = await getSchema(source, controller.signal)
-        if (controller.signal.aborted) return
-        setColumnsByTable(new Map(catalog.tables.map((t) => [t.name, t.columns])))
-      } catch {
-        // Column pickers just fall back to free text.
-      }
-    })()
-    return () => controller.abort()
-  }, [source])
-
-  // Is AI configured? Gates whether Generate auto-enhances.
   useEffect(() => {
     const controller = new AbortController()
     void (async () => {
@@ -135,20 +129,19 @@ export function SemanticPanel({ source }: { source: string }) {
         const cfg = await getAIConfig(controller.signal)
         if (!controller.signal.aborted) setAiConfigured(!!cfg?.configured)
       } catch {
-        // Leave false — Generate stays heuristic-only, Enhance is disabled.
+        // Leave false — the heuristic path still works without AI.
       }
     })()
     return () => controller.abort()
   }, [])
 
-  // No synchronous setState here — the panel is keyed by source, so it remounts
-  // with the initial "loading" state on every source change.
   const load = useCallback(
     async (signal?: AbortSignal) => {
       try {
         const g = await getSemanticDraft(source, signal)
         if (signal?.aborted) return
         setGraph(g)
+        setSaved(g)
         setDirty(false)
         setStatus(g ? "ready" : "empty")
       } catch {
@@ -167,9 +160,6 @@ export function SemanticPanel({ source }: { source: string }) {
       })
     })
 
-  // Poll a running build job to completion, showing the loading state; reveal
-  // the saved draft when done. Used both to watch a job we just started and to
-  // resume watching one that was already running on remount.
   const watchJob = useCallback(
     async (initial: GenerationJob) => {
       jobAbort.current?.abort()
@@ -182,6 +172,17 @@ export function SemanticPanel({ source }: { source: string }) {
       try {
         while (!signal.aborted) {
           if (job.status === "done") {
+            // A build can succeed with some naming batches skipped. Saying so
+            // is the difference between "the AI named it badly" and "the AI
+            // never saw it" — the fix for each is different.
+            if (job.failed_batches > 0) {
+              toast.warning(
+                `Built, but ${job.failed_batches} naming batch(es) failed — ` +
+                  "those entities kept their default names. Ask for a name on " +
+                  "each one, or rebuild.",
+                { description: job.last_batch_error ?? undefined }
+              )
+            }
             await load()
             return
           }
@@ -205,12 +206,9 @@ export function SemanticPanel({ source }: { source: string }) {
         setProgress(null)
       }
     },
-     
     [source, load]
   )
 
-  // On mount / source change: if a build job is already running for this source,
-  // resume watching it (loading + progress); otherwise load the saved draft.
   useEffect(() => {
     const controller = new AbortController()
     void (async () => {
@@ -229,14 +227,33 @@ export function SemanticPanel({ source }: { source: string }) {
     return () => controller.abort()
   }, [source, load, watchJob])
 
-  // Generate = one server-side job (heuristic + AI enrichment when configured).
-  // The panel shows a loading state while it runs and reveals the finished model
-  // in one go. If a build is already running for this source the server returns
-  // it, so this never starts a duplicate.
-  const generate = () =>
+  // Re-validate whenever the model changes, so problems are visible while
+  // editing rather than only at the publish attempt.
+  useEffect(() => {
+    if (!graph) return
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const report = await validateSemantic(source, graph, controller.signal)
+          if (!controller.signal.aborted) setIssues(report.issues)
+        } catch {
+          // Validation is advisory here; the publish call re-checks anyway.
+        }
+      })()
+    }, 400)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [graph, source])
+
+  const generate = (tables: string[], keepEdits: boolean) =>
     void (async () => {
       try {
-        await watchJob(await startGenerate(source, aiConfigured))
+        await watchJob(
+          await startGenerate(source, aiConfigured, { tables, keepEdits })
+        )
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Generation failed")
         await load()
@@ -246,10 +263,11 @@ export function SemanticPanel({ source }: { source: string }) {
   const save = () =>
     void run("save", async () => {
       if (!graph) return
-      const saved = await saveSemanticDraft(source, graph)
-      setGraph(saved)
+      const stored = await saveSemanticDraft(source, graph)
+      setGraph(stored)
+      setSaved(stored)
       setDirty(false)
-      toast.success(`Draft saved (v${saved.version})`)
+      toast.success("Draft saved")
     })
 
   const publish = () =>
@@ -259,17 +277,6 @@ export function SemanticPanel({ source }: { source: string }) {
       toast.success(`Published v${res.version}`)
       await load()
     })
-
-  // Re-run AI enrichment on the current draft as a background job (keeps edits).
-  const enhance = () =>
-    void (async () => {
-      try {
-        await watchJob(await startEnhance(source))
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Enhance failed")
-        await load()
-      }
-    })()
 
   const remove = () =>
     void run("delete", async () => {
@@ -291,65 +298,122 @@ export function SemanticPanel({ source }: { source: string }) {
     }
   }
 
-  // Local edits to business meaning — persisted only when the user saves.
-  const editEntity = (idx: number, patch: Partial<SemanticGraph["entities"][number]>) => {
+  const editEntity = (key: string, patch: Partial<Entity>) => {
     setGraph((g) =>
       g
-        ? { ...g, entities: g.entities.map((e, i) => (i === idx ? { ...e, ...patch } : e)) }
+        ? {
+            ...g,
+            entities: g.entities.map((e) =>
+              e.key === key ? { ...e, ...patch } : e
+            ),
+          }
         : g
     )
-    setDirty(true)
-  }
-  const editMetric = (idx: number, patch: Partial<SemanticGraph["metrics"][number]>) => {
-    setGraph((g) =>
-      g
-        ? { ...g, metrics: g.metrics.map((m, i) => (i === idx ? { ...m, ...patch } : m)) }
-        : g
-    )
-    setDirty(true)
-  }
-  // Add a blank base metric at the top (visible immediately) for the user to fill.
-  const addMetric = () => {
-    setGraph((g) => {
-      if (!g) return g
-      const fresh: MetricDefinition = {
-        name: "",
-        description: "",
-        kind: "base",
-        entity: g.entities[0]?.name ?? null,
-        aggregation: "count",
-        column: null,
-        filters: [],
-        time_dimension: null,
-        expression: null,
-        format: null,
-      }
-      return { ...g, metrics: [fresh, ...g.metrics] }
-    })
-    setSelMetric(0) // the new blank metric sits at the top; open it
-    setDirty(true)
-  }
-  const removeMetric = (idx: number) => {
-    setGraph((g) => (g ? { ...g, metrics: g.metrics.filter((_, i) => i !== idx) } : g))
-    setSelMetric((s) => (idx < s ? s - 1 : s))
     setDirty(true)
   }
 
-  // entity name → table, so a metric's `entity` resolves to its columns.
-  const entityTable = useMemo(
-    () => new Map((graph?.entities ?? []).map((e) => [e.name, e.table])),
-    [graph]
-  )
+  const editDimension = (
+    entityKey: string,
+    column: string,
+    patch: Partial<Dimension>
+  ) => {
+    setGraph((g) =>
+      g
+        ? {
+            ...g,
+            entities: g.entities.map((e) =>
+              e.key === entityKey
+                ? {
+                    ...e,
+                    dimensions: e.dimensions.map((d) =>
+                      d.column === column ? { ...d, ...patch } : d
+                    ),
+                  }
+                : e
+            ),
+          }
+        : g
+    )
+    setDirty(true)
+  }
+
+  const editMetric = (id: string, patch: Partial<MetricDefinition>) => {
+    setGraph((g) =>
+      g
+        ? {
+            ...g,
+            metrics: g.metrics.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+          }
+        : g
+    )
+    setDirty(true)
+  }
+
+  const addMetric = () => {
+    setGraph((g) => {
+      if (!g) return g
+      return { ...g, metrics: [emptyMetric(g.entities[0]?.key ?? null), ...g.metrics] }
+    })
+    setSelMetric(0)
+    setMetricQuery("")
+    setDirty(true)
+  }
+
+  const setRelationships = (relationships: SemanticGraph["relationships"]) => {
+    setGraph((g) => (g ? { ...g, relationships } : g))
+    setDirty(true)
+  }
+
+  const addMetrics = (metrics: MetricDefinition[]) => {
+    if (!metrics.length) return
+    setGraph((g) => (g ? { ...g, metrics: [...metrics, ...g.metrics] } : g))
+    setSelMetric(0)
+    setMetricQuery("")
+    setDirty(true)
+  }
+
+  const removeMetric = (id: string) => {
+    setGraph((g) => (g ? { ...g, metrics: g.metrics.filter((m) => m.id !== id) } : g))
+    setSelMetric((s) => Math.max(0, s - 1))
+    setDirty(true)
+  }
+
+  // Compared by value against the saved copy. Any edit also stamps
+  // `provenance.origin = "user"`, so an object that looks identical really is.
+  const changes = useMemo(() => {
+    const before = new Map(
+      (saved?.entities ?? []).map((e) => [e.key, JSON.stringify(e)])
+    )
+    const beforeMetrics = new Map(
+      (saved?.metrics ?? []).map((m) => [m.id, JSON.stringify(m)])
+    )
+    const entities = new Map<string, "new" | "edited">()
+    for (const e of graph?.entities ?? []) {
+      const prior = before.get(e.key)
+      if (prior === undefined) entities.set(e.key, "new")
+      else if (prior !== JSON.stringify(e)) entities.set(e.key, "edited")
+    }
+    const metrics = new Map<string, "new" | "edited">()
+    for (const m of graph?.metrics ?? []) {
+      const prior = beforeMetrics.get(m.id)
+      if (prior === undefined) metrics.set(m.id, "new")
+      else if (prior !== JSON.stringify(m)) metrics.set(m.id, "edited")
+    }
+    return { entities, metrics }
+  }, [graph, saved])
+
   const entityNames = useMemo(
-    () => [...new Set((graph?.entities ?? []).map((e) => e.name))].sort(),
+    () => new Map((graph?.entities ?? []).map((e) => [e.key, e.name])),
     [graph]
   )
-  // Metric names, for referencing in a derived metric's expression.
   const metricNames = useMemo(
     () =>
       [...new Set((graph?.metrics ?? []).map((m) => m.name).filter(Boolean))].sort(),
     [graph]
   )
+
+  const errors = issues.filter((i) => i.level === "error")
+  const warnings = issues.filter((i) => i.level === "warning")
 
   if (status === "loading") {
     return (
@@ -389,8 +453,8 @@ export function SemanticPanel({ source }: { source: string }) {
             </div>
           )}
           <p className="max-w-sm text-xs text-balance text-muted-foreground">
-            This usually takes a minute. You can leave and come back — we&apos;ll
-            keep working on it.
+            Reading the schema, sampling column values, then naming everything.
+            You can leave and come back — we&apos;ll keep working on it.
           </p>
         </div>
       </div>
@@ -408,77 +472,77 @@ export function SemanticPanel({ source }: { source: string }) {
             entities, dimensions and metrics for you to review.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={generate} disabled={action !== null}>
-          <RiSparkling2Line data-icon="inline-start" />
-          Generate model
-        </Button>
+        <BuildModelDialog
+          source={source}
+          mode="generate"
+          aiConfigured={aiConfigured}
+          disabled={action !== null}
+          onBuild={(tables) => generate(tables, true)}
+        >
+          <Button variant="outline" size="sm">
+            <RiSparkling2Line data-icon="inline-start" />
+            Generate model
+          </Button>
+        </BuildModelDialog>
       </div>
     )
   }
 
-  const published = graph.published
-  // Selection clamped to the current list length (a regenerate can shrink it).
-  const eIdx = graph.entities.length
-    ? Math.min(selEntity, graph.entities.length - 1)
-    : 0
-  const mIdx = graph.metrics.length
-    ? Math.min(selMetric, graph.metrics.length - 1)
-    : 0
-
-  // Per-row "has a blank field" flags — drive the dot in the master list and
-  // the total counts shown above each list.
-  const entityEmpty = (e: SemanticGraph["entities"][number]) =>
-    isBlank(e.name) || isBlank(e.description)
-  const metricEmpty = (m: MetricDefinition) =>
-    isBlank(m.name) ||
-    isBlank(m.description) ||
-    (m.kind === "base" && needsColumn(m.aggregation) && isBlank(m.column)) ||
-    (m.kind === "derived" && isBlank(m.expression))
-  const entityEmpties = graph.entities.filter(entityEmpty).length
-  const metricEmpties = graph.metrics.filter(metricEmpty).length
+  const visibleEntities = graph.entities.filter((e) =>
+    matches(entityQuery, e.name, e.table)
+  )
+  const visibleMetrics = graph.metrics.filter((m) =>
+    matches(metricQuery, m.name, m.description ?? "", entityNames.get(m.entity_key ?? "") ?? "")
+  )
+  const entity = visibleEntities[Math.min(selEntity, visibleEntities.length - 1)]
+  const metric = visibleMetrics[Math.min(selMetric, visibleMetrics.length - 1)]
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <Badge variant={published ? "default" : "secondary"}>
-            {published ? "published" : "draft"}
+          <Badge variant={graph.published ? "default" : "secondary"}>
+            {graph.published ? "published" : "draft"}
           </Badge>
           <span className="tnum">v{graph.version}</span>
-          <span>{graph.provenance}</span>
-          {dirty && <span className="text-accent-brand">unsaved changes</span>}
+          {dirty && (
+            <span className="text-accent-brand">
+              {changes.entities.size + changes.metrics.size || ""} unsaved change
+              {changes.entities.size + changes.metrics.size === 1 ? "" : "s"}
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={enhance}
-            disabled={action !== null || !aiConfigured}
-            title={
-              aiConfigured
-                ? "Improve names & descriptions with AI (only untouched fields)"
-                : "Configure an AI provider in Settings to enable this"
-            }
+          <BuildModelDialog
+            source={source}
+            mode="edit"
+            aiConfigured={aiConfigured}
           >
-            <RiMagicLine data-icon="inline-start" />
-            Enhance with AI
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={generate}
+            <Button variant="ghost" size="sm" title="Tell the AI about this business">
+              <RiTranslate2 data-icon="inline-start" />
+              Business context
+            </Button>
+          </BuildModelDialog>
+          <BuildModelDialog
+            source={source}
+            mode="rebuild"
+            aiConfigured={aiConfigured}
             disabled={action !== null}
-            title={
-              aiConfigured
-                ? "Rebuild from schema, then AI-name it in the background"
-                : "Rebuild the structural draft from the schema (instant)"
-            }
+            scope={graph.scope_tables}
+            onBuild={(tables) => generate(tables, true)}
           >
-            <RiSparkling2Line data-icon="inline-start" />
-            Regenerate
-          </Button>
-          <Button variant="outline" size="sm" onClick={save} disabled={action !== null || !dirty}>
+            <Button variant="ghost" size="sm">
+              <RiSparkling2Line data-icon="inline-start" />
+              Rebuild
+            </Button>
+          </BuildModelDialog>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={save}
+            disabled={action !== null || !dirty}
+          >
             {action === "save" ? (
               <RiLoader4Line data-icon="inline-start" className="animate-spin" />
             ) : (
@@ -486,563 +550,505 @@ export function SemanticPanel({ source }: { source: string }) {
             )}
             Save draft
           </Button>
-          <Button size="sm" onClick={publish} disabled={action !== null}>
-            {action === "publish" ? (
-              <RiLoader4Line data-icon="inline-start" className="animate-spin" />
-            ) : (
-              <RiUploadLine data-icon="inline-start" />
-            )}
-            Publish
-          </Button>
+          <PublishButton
+            errors={errors.length}
+            warnings={warnings.length}
+            graph={graph}
+            busy={action === "publish"}
+            disabled={action !== null || errors.length > 0}
+            onConfirm={publish}
+          />
           <DeleteButton onConfirm={remove} busy={action === "delete"} source={source} />
         </div>
       </div>
 
-      {/* Body — one table per concern so each column is labelled and empty cells
-          are obvious. */}
+      <IssueBanner errors={errors} warnings={warnings} />
+      <SkippedBanner skipped={graph.skipped_tables} />
+
       <Tabs defaultValue="entities" className="flex min-h-0 flex-1 flex-col gap-3">
         <TabsList>
-          <TabsTrigger value="entities">Entities ({graph.entities.length})</TabsTrigger>
-          <TabsTrigger value="metrics">Metrics ({graph.metrics.length})</TabsTrigger>
+          <TabsTrigger value="entities">
+            <TabLabel
+              label="Entities"
+              count={graph.entities.length}
+              unsaved={changes.entities.size}
+            />
+          </TabsTrigger>
+          <TabsTrigger value="metrics">
+            <TabLabel
+              label="Metrics"
+              count={graph.metrics.length}
+              unsaved={changes.metrics.size}
+            />
+          </TabsTrigger>
           <TabsTrigger value="relationships">
-            Relationships ({graph.relationships.length})
+            <TabLabel
+              label="Relationships"
+              count={graph.relationships.length}
+              unsaved={0}
+            />
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="entities" className="flex min-h-0 flex-1 flex-col">
           <MasterDetail
-            header={<EmptyCount n={entityEmpties} />}
+            header={
+              <SearchBar
+                value={entityQuery}
+                onChange={(v) => {
+                  setEntityQuery(v)
+                  setSelEntity(0)
+                }}
+                placeholder="Search entities…"
+                count={visibleEntities.length}
+                total={graph.entities.length}
+              />
+            }
             list={
               <MasterList
-                items={graph.entities.map((e, i) => ({
-                  key: `${e.table}-${i}`,
+                items={visibleEntities.map((e) => ({
+                  key: e.key,
                   title: e.name || humanize(e.table),
                   subtitle: e.table,
-                  empty: entityEmpty(e),
+                  empty: isBlank(e.name) || isBlank(e.description),
+                  dirty: changes.entities.get(e.key) === "edited",
+                  isNew: changes.entities.get(e.key) === "new",
                 }))}
-                selected={eIdx}
+                selected={Math.min(selEntity, Math.max(0, visibleEntities.length - 1))}
                 onSelect={setSelEntity}
               />
             }
           >
-            {(() => {
-              const e = graph.entities[eIdx]
-              if (!e) return null
-              return (
-                <>
-                  <FormField label="Name">
-                    <EditCell
-                      value={e.name}
-                      onChange={(v) => editEntity(eIdx, { name: v })}
-                      label="Entity name"
-                      className="font-medium"
-                    />
-                  </FormField>
-                  <FormField label="Table" hint="Source table — read-only.">
-                    <ReadOnlyValue>{e.table}</ReadOnlyValue>
-                  </FormField>
-                  <FormField label="Description">
-                    <EditArea
-                      value={e.description ?? ""}
-                      onChange={(v) => editEntity(eIdx, { description: v })}
-                      label="Entity description"
-                      placeholder="What this entity means to the business…"
-                    />
-                  </FormField>
-                  <p className="text-xs text-muted-foreground">
-                    {e.dimensions.length} dimension
-                    {e.dimensions.length === 1 ? "" : "s"}
-                  </p>
-                </>
-              )
-            })()}
+            {entity && (
+              <EntityEditor
+                key={entity.key}
+                source={source}
+                entity={entity}
+                entities={graph.entities}
+                metricNames={metricNames}
+                aiConfigured={aiConfigured}
+                onAddMetrics={addMetrics}
+                onChange={(patch) => editEntity(entity.key, patch)}
+                onDimensionChange={(column, patch) =>
+                  editDimension(entity.key, column, patch)
+                }
+              />
+            )}
           </MasterDetail>
         </TabsContent>
 
         <TabsContent value="metrics" className="flex min-h-0 flex-1 flex-col">
-          {/* Metric names, for referencing inside a derived metric's expression. */}
-          <datalist id="semantic-metric-names">
-            {metricNames.map((n) => (
-              <option key={n} value={n} />
-            ))}
-          </datalist>
           <MasterDetail
             header={
-              <>
-                <EmptyCount n={metricEmpties} />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="ml-auto"
-                  onClick={addMetric}
-                >
-                  <RiAddLine data-icon="inline-start" />
-                  Add metric
-                </Button>
-              </>
+              <SearchBar
+                value={metricQuery}
+                onChange={(v) => {
+                  setMetricQuery(v)
+                  setSelMetric(0)
+                }}
+                placeholder="Search metrics…"
+                count={visibleMetrics.length}
+                total={graph.metrics.length}
+              />
             }
             list={
               <MasterList
-                items={graph.metrics.map((m, i) => ({
-                  key: `${metricKey(m)}-${i}`,
+                items={visibleMetrics.map((m) => ({
+                  key: m.id,
                   title: m.name || "(unnamed metric)",
-                  subtitle: recipeSummary(m),
-                  empty: metricEmpty(m),
+                  subtitle: recipeSummary(m, graph.entities),
+                  empty: metricIncomplete(m),
+                  dirty: changes.metrics.get(m.id) === "edited",
+                  isNew: changes.metrics.get(m.id) === "new",
                 }))}
-                selected={mIdx}
+                selected={Math.min(selMetric, Math.max(0, visibleMetrics.length - 1))}
                 onSelect={setSelMetric}
+                footer={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={addMetric}
+                  >
+                    <RiAddLine data-icon="inline-start" />
+                    Add metric
+                  </Button>
+                }
               />
             }
           >
-            {(() => {
-              const m = graph.metrics[mIdx]
-              if (!m) return null
-              const cols =
-                columnsByTable.get(entityTable.get(m.entity ?? "") ?? "") ?? []
-              const aggCols = cols.filter((c) =>
-                m.aggregation && m.aggregation !== "count_distinct"
-                  ? isNumericType(c.data_type)
-                  : true
-              )
-              const timeCols = cols.filter((c) => isTemporalType(c.data_type))
-              return (
-                <>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="tnum text-xs text-muted-foreground">
-                      Metric {mIdx + 1} of {graph.metrics.length}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-muted-foreground hover:text-destructive"
-                      onClick={() => removeMetric(mIdx)}
-                    >
-                      <RiDeleteBinLine data-icon="inline-start" />
-                      Delete
-                    </Button>
-                  </div>
-
-                  <FormField label="Name">
-                    <EditCell
-                      value={m.name}
-                      onChange={(v) => editMetric(mIdx, { name: v })}
-                      label="Metric name"
-                      className="font-medium"
-                    />
-                  </FormField>
-
-                  <FormField label="Kind">
-                    <MiniSelect
-                      value={m.kind}
-                      onChange={(v) =>
-                        editMetric(mIdx, { kind: v as MetricDefinition["kind"] })
-                      }
-                      label="Metric kind"
-                      options={[
-                        { value: "base", label: "base — aggregate a column" },
-                        { value: "derived", label: "derived — formula" },
-                      ]}
-                      className="w-full"
-                    />
-                  </FormField>
-
-                  {m.kind === "derived" ? (
-                    <FormField
-                      label="Expression"
-                      hint="Combine other metrics by name, e.g. Revenue / Order Count."
-                    >
-                      <EditCell
-                        value={m.expression ?? ""}
-                        onChange={(v) => editMetric(mIdx, { expression: v })}
-                        label="Metric expression"
-                        placeholder="Revenue / Order Count"
-                        mono
-                        list="semantic-metric-names"
-                      />
-                    </FormField>
-                  ) : (
-                    <>
-                      <FormField label="Entity">
-                        <MiniSelect
-                          value={m.entity ?? ""}
-                          onChange={(v) => editMetric(mIdx, { entity: v })}
-                          label="Metric entity"
-                          placeholder="Select an entity…"
-                          empty={isBlank(m.entity)}
-                          options={entityNames.map((n) => ({
-                            value: n,
-                            label: n,
-                          }))}
-                          className="w-full"
-                        />
-                      </FormField>
-                      <FormField label="Aggregation">
-                        <MiniSelect
-                          value={m.aggregation ?? ""}
-                          onChange={(v) =>
-                            editMetric(mIdx, { aggregation: v as Aggregation })
-                          }
-                          label="Metric aggregation"
-                          placeholder="Select…"
-                          options={AGGREGATIONS.map((a) => ({
-                            value: a,
-                            label: a,
-                          }))}
-                          className="w-full"
-                        />
-                      </FormField>
-                      {needsColumn(m.aggregation) && (
-                        <FormField label="Column">
-                          <MiniSelect
-                            value={m.column ?? ""}
-                            onChange={(v) => editMetric(mIdx, { column: v })}
-                            label="Metric column"
-                            placeholder="Select a column…"
-                            empty={isBlank(m.column)}
-                            options={aggCols.map((c) => ({
-                              value: c.name,
-                              label: c.name,
-                            }))}
-                            className="w-full"
-                          />
-                        </FormField>
-                      )}
-                      <FormField label="Time dimension" hint="Optional.">
-                        <MiniSelect
-                          value={m.time_dimension ?? ""}
-                          onChange={(v) =>
-                            editMetric(mIdx, { time_dimension: v || null })
-                          }
-                          label="Metric time dimension"
-                          placeholder="None"
-                          options={timeCols.map((c) => ({
-                            value: c.name,
-                            label: c.name,
-                          }))}
-                          className="w-full"
-                        />
-                      </FormField>
-                    </>
-                  )}
-
-                  <FormField label="Format" hint="Optional.">
-                    <MiniSelect
-                      value={m.format ?? ""}
-                      onChange={(v) => editMetric(mIdx, { format: v || null })}
-                      label="Metric format"
-                      placeholder="None"
-                      options={FORMATS.map((f) => ({ value: f, label: f }))}
-                      className="w-full"
-                    />
-                  </FormField>
-
-                  <FormField label="Definition">
-                    <EditArea
-                      value={m.description ?? ""}
-                      onChange={(v) => editMetric(mIdx, { description: v })}
-                      label="Metric definition"
-                      placeholder="What this metric means to the business…"
-                    />
-                  </FormField>
-                </>
-              )
-            })()}
+            {metric && (
+              <MetricEditor
+                key={metric.id}
+                source={source}
+                metric={metric}
+                entities={graph.entities}
+                metricNames={metricNames}
+                aiConfigured={aiConfigured}
+                onChange={(patch) => editMetric(metric.id, patch)}
+                onDelete={() => removeMetric(metric.id)}
+              />
+            )}
           </MasterDetail>
         </TabsContent>
 
         <TabsContent value="relationships" className="flex min-h-0 flex-1 flex-col">
-          <div className="relative min-h-0 flex-1 overflow-auto border [&_[data-slot=table-container]]:overflow-visible">
-            <Table>
-              <TableHeader className="sticky top-0 z-10 bg-background">
-                <TableRow>
-                  <TableHead className="w-10 text-right">#</TableHead>
-                  <TableHead>From</TableHead>
-                  <TableHead>Column</TableHead>
-                  <TableHead>To</TableHead>
-                  <TableHead>Column</TableHead>
-                  <TableHead className="w-32">Kind</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {graph.relationships.map((r, i) => (
-                  <TableRow key={i}>
-                    <TableCell className="text-right text-xs text-muted-foreground tnum">
-                      {i + 1}
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">{r.from_entity}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {r.from_column}
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">{r.to_entity}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {r.to_column}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{r.kind}</Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {graph.relationships.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-sm text-muted-foreground">
-                      No relationships detected.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
+          <RelationshipEditor
+            source={source}
+            entities={graph.entities}
+            relationships={graph.relationships}
+            onChange={setRelationships}
+          />
         </TabsContent>
       </Tabs>
     </div>
   )
 }
 
-/** One-line summary of a metric's recipe, shown under its name in the list. */
-function recipeSummary(m: MetricDefinition): string {
-  if (m.kind === "derived") return m.expression || "= …"
-  const col = m.column ? `.${m.column}` : ""
-  return `${m.aggregation ?? "?"}(${m.entity ?? "?"}${col})`
+function matches(query: string, ...fields: string[]): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  return fields.some((f) => f.toLowerCase().includes(q))
 }
 
-/** Master–detail layout: a scrollable list on the left, the selected item's
- * editor on the right. Replaces the old wide table whose columns truncated. */
-function MasterDetail({
-  header,
-  list,
-  children,
+function SearchBar({
+  value,
+  onChange,
+  placeholder,
+  count,
+  total,
 }: {
-  header: React.ReactNode
-  list: React.ReactNode
-  children: React.ReactNode
+  value: string
+  onChange: (v: string) => void
+  placeholder: string
+  count: number
+  total: number
 }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        {header}
-      </div>
-      <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[minmax(0,15rem)_1fr]">
-        {list}
-        <div className="min-h-0 overflow-y-auto">
-          <div className="flex max-w-2xl flex-col gap-4 pr-1 pb-4">
-            {children}
-          </div>
-        </div>
-      </div>
+    <div className="flex items-center gap-2">
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        className="h-7 w-56 text-xs"
+      />
+      <span className="tnum">
+        {count === total ? `${total}` : `${count} of ${total}`}
+      </span>
     </div>
   )
 }
 
-function MasterList({
-  items,
-  selected,
-  onSelect,
+function EntityEditor({
+  source,
+  entity,
+  entities,
+  metricNames,
+  aiConfigured,
+  onChange,
+  onDimensionChange,
+  onAddMetrics,
 }: {
-  items: { key: string; title: string; subtitle?: string; empty: boolean }[]
-  selected: number
-  onSelect: (i: number) => void
+  source: string
+  entity: Entity
+  entities: Entity[]
+  metricNames: string[]
+  aiConfigured: boolean
+  onChange: (patch: Partial<Entity>) => void
+  onDimensionChange: (column: string, patch: Partial<Dimension>) => void
+  onAddMetrics: (metrics: MetricDefinition[]) => void
+}) {
+  const [drafting, setDrafting] = useState(false)
+  const [aiFields, setAiFields] = useState<string[]>([])
+  const [reasoning, setReasoning] = useState("")
+  const [warnings, setWarnings] = useState<string[]>([])
+  const locked = entity.provenance.locked
+  const visible = entity.dimensions.filter((d) => !d.hidden).length
+
+  // Ask about the entity you are looking at, rather than re-running naming
+  // across the whole model and hoping this one improves.
+  const describe = (prompt: string) =>
+    void (async () => {
+      setDrafting(true)
+      try {
+        const result = await draftEntity(source, {
+          prompt,
+          entity_key: entity.key,
+        })
+        onChange({
+          name: result.name,
+          description: result.description,
+          provenance: USER,
+        })
+        setAiFields(result.changed_fields)
+        setReasoning(result.reasoning)
+        setWarnings(result.warnings)
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Could not read that")
+      } finally {
+        setDrafting(false)
+      }
+    })()
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground">
+          {entity.provenance.origin === "ai" && "Named by AI"}
+          {entity.provenance.origin === "user" && "Edited by you"}
+        </span>
+        <div className="flex items-center gap-2">
+        {aiConfigured && (
+          <SuggestMetricsButton
+            source={source}
+            entity={entity}
+            entities={entities}
+            existingNames={metricNames}
+            onAdd={onAddMetrics}
+          />
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() =>
+            onChange({
+              provenance: { ...entity.provenance, locked: !locked },
+            })
+          }
+          title={
+            locked
+              ? "Unlock — let AI improve this again"
+              : "Lock — keep this exactly as it is"
+          }
+        >
+          {locked ? (
+            <RiLockLine data-icon="inline-start" />
+          ) : (
+            <RiLockUnlockLine data-icon="inline-start" />
+          )}
+          {locked ? "Locked" : "Lock"}
+        </Button>
+        </div>
+      </div>
+
+      {aiConfigured && !locked && (
+        <PromptBox
+          id="entity-prompt"
+          label="Describe it in words"
+          placeholder="this table holds one tuition invoice per student"
+          hint="Only the name and description change — the table and its columns come from the database."
+          busy={drafting}
+          onSubmit={describe}
+        />
+      )}
+
+      <DraftNotes reasoning={reasoning} warnings={warnings} />
+
+      <FormField label="Name" highlighted={aiFields.includes("name")}>
+        <EditCell
+          value={entity.name}
+          onChange={(v) => onChange({ name: v, provenance: USER })}
+          label="Entity name"
+          className="font-medium"
+          highlighted={aiFields.includes("name")}
+        />
+      </FormField>
+      <FormField label="Table" hint="Source table — read-only.">
+        <ReadOnlyValue>
+          {entity.schema_name}.{entity.table}
+        </ReadOnlyValue>
+      </FormField>
+      <FormField label="What it is" highlighted={aiFields.includes("description")}>
+        <EditArea
+          value={entity.description ?? ""}
+          onChange={(v) => onChange({ description: v, provenance: USER })}
+          label="Entity description"
+          placeholder="What this entity means to the business…"
+          highlighted={aiFields.includes("description")}
+        />
+      </FormField>
+
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-muted-foreground">
+            Ways to slice it ({visible} shown of {entity.dimensions.length})
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Hidden columns stay in the model but are not published — use it for
+          internal ids and free-text notes nobody groups by.
+        </p>
+        <div className="flex flex-col divide-y border">
+          {entity.dimensions.map((dim) => (
+            <DimensionRow
+              key={dim.column}
+              dimension={dim}
+              onChange={(patch) => onDimensionChange(dim.column, patch)}
+            />
+          ))}
+          {entity.dimensions.length === 0 && (
+            <p className="p-3 text-sm text-muted-foreground">
+              No columns to slice by.
+            </p>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
+function DimensionRow({
+  dimension,
+  onChange,
+}: {
+  dimension: Dimension
+  onChange: (patch: Partial<Dimension>) => void
 }) {
   return (
-    <div className="flex min-h-0 flex-col overflow-y-auto border">
-      <ul className="flex flex-col">
-        {items.map((it, i) => (
-          <li key={it.key}>
-            <button
-              type="button"
-              onClick={() => onSelect(i)}
-              aria-current={selected === i ? "true" : undefined}
-              className={cn(
-                "flex w-full flex-col gap-0.5 border-b border-l-2 border-l-transparent px-3 py-2 text-left transition-colors",
-                selected === i
-                  ? "border-l-accent-brand bg-accent-brand/15"
-                  : "hover:bg-accent-brand/8"
-              )}
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                {it.empty && (
-                  <span
-                    className="size-1.5 shrink-0 rounded-full bg-accent-brand"
-                    title="has empty fields"
-                  />
-                )}
-                <span
-                  className={cn(
-                    "truncate text-sm",
-                    selected === i && "font-medium"
-                  )}
-                >
-                  {it.title}
-                </span>
-              </span>
-              {it.subtitle && (
-                <span className="truncate font-mono text-xs text-muted-foreground">
-                  {it.subtitle}
-                </span>
-              )}
-            </button>
-          </li>
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-2 p-2",
+        dimension.hidden && "opacity-50"
+      )}
+    >
+      <EditCell
+        value={dimension.name}
+        onChange={(v) => onChange({ name: v, provenance: USER })}
+        label={`Name for ${dimension.column}`}
+        className="min-w-40 flex-1"
+      />
+      <span className="w-40 truncate font-mono text-xs text-muted-foreground">
+        {dimension.column}
+      </span>
+      <Badge variant="outline" className="w-20 justify-center">
+        {dimension.kind}
+      </Badge>
+      {dimension.sample_values.length > 0 && (
+        <span
+          className="max-w-40 truncate text-xs text-muted-foreground"
+          title={dimension.sample_values.map(String).join(", ")}
+        >
+          {dimension.sample_values.slice(0, 3).map(String).join(", ")}
+        </span>
+      )}
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-label={dimension.hidden ? "Show this column" : "Hide this column"}
+        title={dimension.hidden ? "Show this column" : "Hide this column"}
+        onClick={() => onChange({ hidden: !dimension.hidden })}
+      >
+        {dimension.hidden ? <RiEyeOffLine /> : <RiCheckLine />}
+      </Button>
+    </div>
+  )
+}
+
+function IssueBanner({
+  errors,
+  warnings,
+}: {
+  errors: ValidationIssue[]
+  warnings: ValidationIssue[]
+}) {
+  if (errors.length === 0 && warnings.length === 0) return null
+  const shown = [...errors, ...warnings].slice(0, 4)
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-1 border p-2 text-xs",
+        errors.length > 0
+          ? "border-destructive/40 bg-destructive/5"
+          : "border-amber-500/40 bg-amber-500/5"
+      )}
+    >
+      <span className="flex items-center gap-1.5 font-medium">
+        <RiAlertLine className="size-3.5" />
+        {errors.length > 0
+          ? `${errors.length} problem(s) block publishing`
+          : `${warnings.length} thing(s) worth checking`}
+      </span>
+      <ul className="flex flex-col gap-0.5 text-muted-foreground">
+        {shown.map((issue, i) => (
+          <li key={`${issue.code}-${i}`}>• {issue.message}</li>
         ))}
-        {items.length === 0 && (
-          <li className="p-3 text-sm text-muted-foreground">Nothing here.</li>
+        {errors.length + warnings.length > shown.length && (
+          <li>…and {errors.length + warnings.length - shown.length} more</li>
         )}
       </ul>
     </div>
   )
 }
 
-/** One labelled field in the editor form. */
-function FormField({
-  label,
-  hint,
-  children,
+function SkippedBanner({ skipped }: { skipped: { table: string; reason: string }[] }) {
+  if (!skipped.length) return null
+  return (
+    <p className="border bg-wash p-2 text-xs text-muted-foreground">
+      {skipped.length} table(s) were left out because they have no primary key:{" "}
+      <span className="font-mono">
+        {skipped
+          .slice(0, 6)
+          .map((s) => s.table)
+          .join(", ")}
+      </span>
+      {skipped.length > 6 && ` and ${skipped.length - 6} more`}.
+    </p>
+  )
+}
+
+function PublishButton({
+  errors,
+  warnings,
+  graph,
+  busy,
+  disabled,
+  onConfirm,
 }: {
-  label: string
-  hint?: string
-  children: React.ReactNode
+  errors: number
+  warnings: number
+  graph: SemanticGraph
+  busy: boolean
+  disabled: boolean
+  onConfirm: () => void
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      {children}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-    </div>
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          size="sm"
+          disabled={disabled}
+          title={errors > 0 ? "Fix the problems above first" : "Publish this model"}
+        >
+          {busy ? (
+            <RiLoader4Line data-icon="inline-start" className="animate-spin" />
+          ) : (
+            <RiUploadLine data-icon="inline-start" />
+          )}
+          Publish
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Publish this model?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {graph.entities.length} entities · {graph.metrics.length} metrics ·{" "}
+            {graph.relationships.length} relationships
+            {warnings > 0 && ` · ${warnings} warning(s)`}
+            <br />
+            It becomes the model queries run against, compiled for the query
+            engine.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm}>Publish</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 
-function ReadOnlyValue({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex h-9 items-center rounded-md border border-border/50 bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
-      {children}
-    </div>
-  )
-}
-
-function EmptyCount({ n }: { n: number }) {
-  return (
-    <span className={cn(n > 0 && "text-accent-brand")}>
-      {n} empty field{n === 1 ? "" : "s"}
-    </span>
-  )
-}
-
-/** A multi-line editable field. Blank tints + tags for parity with EditCell. */
-function EditArea({
-  value,
-  onChange,
-  label,
-  placeholder,
-}: {
-  value: string
-  onChange: (v: string) => void
-  label: string
-  placeholder?: string
-}) {
-  const empty = isBlank(value)
-  return (
-    <Textarea
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      aria-label={label}
-      placeholder={placeholder}
-      rows={3}
-      data-empty={empty ? "true" : undefined}
-      className={cn(
-        "resize-y border-border/50 bg-transparent shadow-none hover:border-border focus-visible:border-border",
-        empty && "border-accent-brand/50 bg-accent-brand/5"
-      )}
-    />
-  )
-}
-
-/** Lightweight native <select> styled like EditCell — cheap enough for hundreds
- * of rows (Radix Select would not be). `empty` tints + tags it for the nav. */
-function MiniSelect({
-  value,
-  onChange,
-  options,
-  label,
-  placeholder,
-  className,
-  empty,
-}: {
-  value: string
-  onChange: (v: string) => void
-  options: { value: string; label: string }[]
-  label: string
-  placeholder?: string
-  className?: string
-  empty?: boolean
-}) {
-  // Options can collide by value (e.g. two entities the AI named the same) —
-  // dedupe so React keys stay unique and the list isn't visually doubled.
-  const seen = new Set<string>()
-  const unique = options.filter((o) => !seen.has(o.value) && seen.add(o.value))
-  return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      aria-label={label}
-      data-empty={empty ? "true" : undefined}
-      className={cn(
-        "h-8 rounded-md border border-border/50 bg-transparent px-2 text-sm outline-none transition-colors hover:border-border focus-visible:border-border",
-        empty && "border-accent-brand/50 bg-accent-brand/5",
-        className
-      )}
-    >
-      {placeholder !== undefined && <option value="">{placeholder}</option>}
-      {unique.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  )
-}
-
-/** An editable table cell. Blank cells are tinted and tagged `data-empty` so the
- * empty-field navigator can jump between them. */
-function EditCell({
-  value,
-  onChange,
-  label,
-  placeholder,
-  className,
-  mono,
-  list,
-}: {
-  value: string
-  onChange: (v: string) => void
-  label: string
-  placeholder?: string
-  className?: string
-  mono?: boolean
-  /** id of a <datalist> to offer autocomplete (e.g. column references). */
-  list?: string
-}) {
-  const empty = isBlank(value)
-  return (
-    <Input
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      aria-label={label}
-      placeholder={placeholder}
-      list={list}
-      data-empty={empty ? "true" : undefined}
-      className={cn(
-        // A faint border always shows so the cell reads as editable; it darkens
-        // on hover/focus.
-        "h-8 border-border/50 bg-transparent shadow-none hover:border-border focus-visible:border-border",
-        mono && "font-mono text-xs",
-        empty && "border-accent-brand/50 bg-accent-brand/5",
-        className
-      )}
-    />
-  )
-}
-
-/** Scroll container with a "jump to next / previous empty field" toolbar. Finds
- * empties by their `data-empty` marker relative to the current scroll position,
- * wrapping around at the ends. */
 function DeleteButton({
   onConfirm,
   busy,

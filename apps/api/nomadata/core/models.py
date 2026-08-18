@@ -10,8 +10,9 @@ from __future__ import annotations
 import os
 from enum import StrEnum
 from typing import Any
+from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ======================================================================
 # AI boundary
@@ -255,10 +256,31 @@ class TimeSpec(BaseModel):
     grain: TimeGrain | None = None
 
 
+#: Every operator the whole stack knows how to execute. An operator outside this
+#: set must be rejected at the edge — silently falling back to ``eq`` produces
+#: wrong numbers with no error, the worst failure mode an analytics tool has.
+FILTER_OPERATORS = frozenset(
+    {"eq", "neq", "gt", "gte", "lt", "lte", "in", "not_in", "contains", "set", "not_set"}
+)
+
+#: Operators that carry no value (``... IS NULL``).
+VALUELESS_OPERATORS = frozenset({"set", "not_set"})
+
+
 class Filter(BaseModel):
     field: str
-    operator: str  # eq, neq, gt, gte, lt, lte, in, contains
-    value: Any
+    operator: str  # see FILTER_OPERATORS
+    value: Any = None
+
+    @field_validator("operator")
+    @classmethod
+    def _known_operator(cls, value: str) -> str:
+        if value not in FILTER_OPERATORS:
+            raise ValueError(
+                f"Unknown filter operator {value!r}; expected one of "
+                f"{', '.join(sorted(FILTER_OPERATORS))}"
+            )
+        return value
 
 
 class AnalyticalQuery(BaseModel):
@@ -301,10 +323,47 @@ class QueryResult(BaseModel):
 # ======================================================================
 
 
+class Origin(StrEnum):
+    heuristic = "heuristic"  # produced by rules over the schema
+    ai = "ai"  # produced or improved by the model
+    user = "user"  # typed by a human — AI must not overwrite
+
+
+class Provenance(BaseModel):
+    """Where an object's business text came from, and whether AI may touch it.
+
+    This replaces guessing "has the user edited this?" from the string itself
+    (a name ending in " Count" used to mean "still a default"), which silently
+    overwrote hand-written values. Enrichment now only rewrites objects whose
+    ``origin`` is not ``user`` and that are not ``locked``.
+    """
+
+    origin: Origin = Origin.heuristic
+    locked: bool = False  # user pinned it: never rewrite, whatever the origin
+
+
+class DimensionKind(StrEnum):
+    time = "time"
+    number = "number"
+    string = "string"
+    boolean = "boolean"
+
+
 class Dimension(BaseModel):
+    """An attribute to slice by. ``kind`` is read from the catalog rather than
+    guessed from the column name — the query layer needs the real type."""
+
     name: str
     column: str
+    kind: DimensionKind = DimensionKind.string
+    data_type: str = ""  # native DB type, for display
+    hidden: bool = False  # kept in the model but not published to the query layer
     description: str | None = None
+    # Profiling hints — power the filter value picker and give the AI real
+    # examples to name the column from. Only kept for low-cardinality columns.
+    distinct_count: int | None = None
+    sample_values: list[Any] = Field(default_factory=list)
+    provenance: Provenance = Field(default_factory=Provenance)
 
 
 class Aggregation(StrEnum):
@@ -326,19 +385,25 @@ class MetricDefinition(BaseModel):
     """A named business number. Structured, not a free SQL string, so the query
     engine can execute it and the UI can edit it with pickers.
 
-    - ``base``: an ``aggregation`` over ``column`` on ``entity``, with optional
-      ``filters`` (business rules) and a ``time_dimension`` (the date column this
-      metric is measured over — grain is chosen at query time, not here).
+    - ``base``: an ``aggregation`` over ``column`` on the entity identified by
+      ``entity_key``, with optional ``filters`` (business rules) and a
+      ``time_dimension`` (the date column this metric is measured over — grain
+      is chosen at query time, not here).
     - ``derived``: an ``expression`` combining other metrics by name, e.g.
       ``"Revenue / Order Count"``.
+
+    ``id`` is the stable handle. ``name`` is a label a human retitles freely, so
+    nothing may reference a metric by name except a derived expression (which
+    the validator checks).
     """
 
+    id: str = Field(default_factory=lambda: uuid4().hex)
     name: str
     description: str | None = None
     kind: MetricKind = MetricKind.base
 
     # base metric
-    entity: str | None = None  # the entity (its table) this metric aggregates
+    entity_key: str | None = None  # Entity.key — NOT the display name
     aggregation: Aggregation | None = None
     column: str | None = None  # column to aggregate; None for count
     filters: list[Filter] = Field(default_factory=list)
@@ -350,21 +415,45 @@ class MetricDefinition(BaseModel):
     # display
     format: str | None = None  # "currency" | "percent" | "number"
 
+    provenance: Provenance = Field(default_factory=Provenance)
+
 
 class Relationship(BaseModel):
-    from_entity: str
-    to_entity: str
+    """A join between two entities, addressed by stable key."""
+
+    from_entity_key: str
+    to_entity_key: str
     from_column: str
     to_column: str
     kind: str = "many_to_one"
 
 
 class Entity(BaseModel):
+    """A business object backed by one table.
+
+    ``key`` is the immutable identity every other part of the graph points at;
+    ``name`` is the human label and may be rewritten at will. Keeping these
+    separate is what stops an AI rename from orphaning metrics and joins.
+    """
+
+    key: str
     name: str
     table: str
+    schema_name: str = "public"
     primary_key: str = "id"
     dimensions: list[Dimension] = Field(default_factory=list)
     description: str | None = None
+    hidden: bool = False
+    provenance: Provenance = Field(default_factory=Provenance)
+
+
+def _humanize_identifier(identifier: str) -> str:
+    """``order_items`` → ``Order Items``. Duplicated (small) from the suggester
+    so ``core`` stays dependency-free; used only to repair legacy graphs."""
+    spaced = identifier.replace("_", " ").replace("-", " ").strip()
+    if not spaced:
+        return identifier
+    return " ".join(word.capitalize() for word in spaced.split())
 
 
 class SemanticGraph(BaseModel):
@@ -376,9 +465,256 @@ class SemanticGraph(BaseModel):
     relationships: list[Relationship] = Field(default_factory=list)
     version: int = 1
     published: bool = False
+    # Bumped on every draft save. The client sends back what it loaded, so two
+    # tabs editing the same model collide loudly instead of overwriting silently.
+    revision: int = 0
     # How this draft was produced: "ai" (LLM-enriched) or "heuristic" (rule-based).
     # A suggestion — never a guarantee; a human still reviews and publishes.
     provenance: str = "heuristic"
+    # Tables left out of the model and why (e.g. no primary key). A dropped
+    # table must be visible to the user, never a silent disappearance.
+    skipped_tables: list[dict[str, str]] = Field(default_factory=list)
+    # Tables the model was built from. Empty = the whole catalog.
+    scope_tables: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade_legacy(cls, data: Any) -> Any:
+        """Migrate graphs stored before entities had a stable ``key``.
+
+        Old rows keyed metrics by the entity's *display name* and relationships
+        by its *table name*. Both are repaired here on load, so a model built by
+        an earlier version keeps working instead of silently losing every
+        measure. References that cannot be resolved are dropped rather than
+        guessed — the validator then reports them.
+        """
+        if not isinstance(data, dict):
+            return data
+        entities = data.get("entities")
+        if not isinstance(entities, list):
+            return data
+
+        by_name: dict[str, str] = {}
+        by_table: dict[str, str] = {}
+        upgraded = False
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            table = str(entity.get("table") or "")
+            if not entity.get("key"):
+                schema = str(entity.get("schema_name") or "public")
+                entity["key"] = f"{schema}.{table}" if table else schema
+                upgraded = True
+            key = str(entity["key"])
+            if entity.get("name"):
+                by_name.setdefault(str(entity["name"]), key)
+            if table:
+                by_table.setdefault(table, key)
+                # Metrics written before an AI rename still hold the original
+                # humanized table name — recover those too.
+                by_name.setdefault(_humanize_identifier(table), key)
+        if not upgraded:
+            return data
+
+        for metric in data.get("metrics") or []:
+            if not isinstance(metric, dict) or metric.get("entity_key"):
+                continue
+            legacy = metric.pop("entity", None)
+            if legacy:
+                resolved = by_name.get(str(legacy)) or by_table.get(str(legacy))
+                if resolved:
+                    metric["entity_key"] = resolved
+
+        relationships = []
+        for rel in data.get("relationships") or []:
+            if not isinstance(rel, dict):
+                continue
+            if not rel.get("from_entity_key"):
+                legacy_from = rel.pop("from_entity", None)
+                legacy_to = rel.pop("to_entity", None)
+                source = by_table.get(str(legacy_from)) or by_name.get(str(legacy_from))
+                target = by_table.get(str(legacy_to)) or by_name.get(str(legacy_to))
+                if not source or not target:
+                    continue  # unresolvable join — drop rather than invent one
+                rel["from_entity_key"] = source
+                rel["to_entity_key"] = target
+            relationships.append(rel)
+        data["relationships"] = relationships
+        return data
+
+
+class BusinessContext(BaseModel):
+    """What the AI needs to know about *this* business before it can name
+    anything usefully. Written once per data source, injected into every
+    semantic prompt. Free text from the user — never trusted to relax the hard
+    rules in the system prompt, only to inform naming."""
+
+    source_id: str = ""
+    domain: str = ""  # "SaaS quản lý trường học, khách hàng là trường tư"
+    glossary: str = ""  # "dot = đợt thu; hs = học sinh"
+    conventions: str = ""  # "bảng scp_* là nghiệp vụ chính; *_tmp bỏ qua"
+    # Language for generated names and descriptions. The application chrome is
+    # always English; this only controls the content the model writes.
+    language: str = "en"
+    instructions: str = ""  # free-form preferences
+
+    def is_empty(self) -> bool:
+        return not any(
+            (
+                self.domain.strip(),
+                self.glossary.strip(),
+                self.conventions.strip(),
+                self.instructions.strip(),
+            )
+        )
+
+
+class IssueLevel(StrEnum):
+    error = "error"  # blocks publish
+    warning = "warning"  # shown, does not block
+
+
+class ValidationIssue(BaseModel):
+    level: IssueLevel
+    code: str
+    message: str
+    target: str | None = None  # Entity.key or MetricDefinition.id
+    target_kind: str | None = None  # "entity" | "metric" | "relationship"
+
+
+class ValidationReport(BaseModel):
+    """Why a model can or cannot be published. Publishing a graph that Cube
+    cannot execute used to succeed silently; this is the gate."""
+
+    ok: bool = True
+    issues: list[ValidationIssue] = Field(default_factory=list)
+
+    @property
+    def errors(self) -> list[ValidationIssue]:
+        return [i for i in self.issues if i.level == IssueLevel.error]
+
+    @property
+    def warnings(self) -> list[ValidationIssue]:
+        return [i for i in self.issues if i.level == IssueLevel.warning]
+
+
+class MetricDraftRequest(BaseModel):
+    """Describe one metric in words; get a filled-in definition back.
+
+    ``base`` set = edit that metric ("tính theo ngày tạo thay vì ngày thu");
+    ``base`` null = create a new one. Nothing is saved — the client fills its
+    form with the result and the user still presses Save."""
+
+    prompt: str
+    base: MetricDefinition | None = None
+    entity_key: str | None = None  # None: let the model pick the entity
+
+
+class MetricDraftResponse(BaseModel):
+    metric: MetricDefinition
+    changed_fields: list[str] = Field(default_factory=list)  # for highlighting
+    reasoning: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ProposedFilter(BaseModel):
+    field: str = ""
+    operator: str = "eq"
+    value: Any = None
+
+
+class MetricProposal(BaseModel):
+    """The raw shape asked of the model — deliberately all-strings and separate
+    from ``MetricDefinition`` so a sloppy reply fails one field instead of the
+    whole call, and so the model can never set ``id`` or ``provenance``."""
+
+    name: str = ""
+    entity_key: str = ""
+    kind: str = "base"
+    aggregation: str = ""
+    column: str = ""
+    filters: list[ProposedFilter] = Field(default_factory=list)
+    time_dimension: str = ""
+    expression: str = ""
+    format: str = ""
+    description: str = ""
+    reasoning: str = ""
+
+
+class EntityDraftRequest(BaseModel):
+    """Describe one entity in words and get its business text back.
+
+    The same "ask right where you are editing" move as ``MetricDraftRequest``,
+    which replaced a single global re-enrichment pass: the user is looking at
+    one entity, so the request is about that one entity.
+    """
+
+    prompt: str
+    entity_key: str
+
+
+class EntityProposal(BaseModel):
+    """What the model is asked for — text only. Structure (table, columns, keys)
+    is never up for negotiation, so it is not in this shape at all."""
+
+    name: str = ""
+    description: str = ""
+    reasoning: str = ""
+
+
+class EntityDraftResponse(BaseModel):
+    name: str
+    description: str
+    changed_fields: list[str] = Field(default_factory=list)
+    reasoning: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MetricSuggestRequest(BaseModel):
+    """Ask for the metrics worth having on one entity.
+
+    Scoped to one entity on purpose: a 122-table model has a handful of tables
+    anyone measures and a long tail of lookup tables nobody does, and proposing
+    for all of them buries the useful ones.
+    """
+
+    entity_key: str
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+class MetricProposalList(BaseModel):
+    """What the model returns for a suggestion request."""
+
+    metrics: list[MetricProposal] = Field(default_factory=list)
+
+
+class MetricSuggestResponse(BaseModel):
+    """Proposals, already checked against the catalog. Nothing is saved — the
+    user picks which ones to keep."""
+
+    metrics: list[MetricDefinition] = Field(default_factory=list)
+    #: Per proposal, in the same order: why the model suggested it.
+    reasons: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MetricPreview(BaseModel):
+    """Result of running one metric against the real database ("Chạy thử").
+
+    The number is what tells a business user whether the definition is right —
+    they know their own figures. ``sql`` makes the answer traceable."""
+
+    metric_id: str
+    value: Any | None = None
+    row_count: int | None = None
+    #: The span of the metric's time column across the matched rows. Without it
+    #: a number is undated, and the commonest modelling mistake — measuring by
+    #: the record-created date instead of the event date — stays invisible.
+    period_start: Any | None = None
+    period_end: Any | None = None
+    time_column: str | None = None
+    sql: str = ""
+    error: str | None = None
 
 
 class PublishResult(BaseModel):
@@ -395,18 +731,17 @@ class SemanticModelVersion(BaseModel):
 
 class EntityHint(BaseModel):
     """Compact AI enrichment for one entity — business text only, matched back
-    to the model by ``table``. Keeps the enrichment response small and fast."""
+    by ``key``. Keeps the enrichment response small and fast."""
 
-    table: str
+    key: str
     name: str = ""
     description: str = ""
 
 
 class MetricHint(BaseModel):
-    """Compact AI enrichment for one metric, matched back by ``key`` (a stable
-    identifier the caller computes, e.g. ``sum(Payment.amount)``)."""
+    """Compact AI enrichment for one metric, matched back by its stable ``id``."""
 
-    key: str
+    id: str
     name: str = ""
     definition: str = ""
 
@@ -428,11 +763,15 @@ class GenerationJob(BaseModel):
 
     id: str
     source_id: str
-    kind: str = "generate"  # generate | enhance
+    kind: str = "generate"
     status: JobStatus = JobStatus.running
     done: int = 0  # batches finished
     total: int = 0  # total batches (0 = no AI step)
     error: str | None = None
+    # Naming batches that failed. The build still succeeds — those entities keep
+    # their heuristic names — but "partly named" must not read as "named".
+    failed_batches: int = 0
+    last_batch_error: str | None = None
 
 
 class SemanticModelSummary(BaseModel):
@@ -449,6 +788,12 @@ class SemanticModelSummary(BaseModel):
     entity_count: int = 0
     metric_count: int = 0
     relationship_count: int = 0
+    # Structural health, from the same validator the Publish button uses (no
+    # database hit): errors block a publish, warnings are advisory.
+    error_count: int = 0
+    warning_count: int = 0
+    # A draft exists that is newer than the published model — unpublished work.
+    has_unpublished_changes: bool = False
 
 
 # ======================================================================

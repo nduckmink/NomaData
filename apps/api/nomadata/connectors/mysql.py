@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import date, datetime
-from datetime import time as dtime
-from decimal import Decimal
 from typing import Any
 
 import aiomysql
 
 from nomadata.connectors.profiling import detect_categorical
+from nomadata.connectors.values import to_jsonable
 from nomadata.core.errors import DataConnectionError
 from nomadata.core.interfaces.data_source import DataSource
 from nomadata.core.models import (
@@ -36,19 +34,6 @@ from nomadata.core.models import (
 def _quote_ident(name: str) -> str:
     """Backtick-quote an identifier (prevents identifier injection)."""
     return "`" + name.replace("`", "``") + "`"
-
-
-def _to_jsonable(value: Any) -> Any:
-    """Coerce driver-native values into JSON-serializable primitives."""
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, (datetime, date, dtime)):
-        return value.isoformat()
-    if isinstance(value, (bytes, bytearray)):
-        return value.decode("utf-8", "replace")
-    return str(value)
 
 
 class MySQLDataSource(DataSource):
@@ -74,6 +59,10 @@ class MySQLDataSource(DataSource):
     @property
     def name(self) -> str:
         return self._name
+
+    @property
+    def dialect(self) -> str:
+        return "mysql"
 
     async def _get_pool(self) -> Any:
         if self._pool is None:
@@ -189,9 +178,9 @@ class MySQLDataSource(DataSource):
             column=target.column,
             null_fraction=(nulls / total) if total else None,
             distinct_count=distinct_count,
-            min_value=_to_jsonable(agg.get("minv")),
-            max_value=_to_jsonable(agg.get("maxv")),
-            sample_values=[_to_jsonable(row["v"]) for row in sample_rows],
+            min_value=to_jsonable(agg.get("minv")),
+            max_value=to_jsonable(agg.get("maxv")),
+            sample_values=[to_jsonable(row["v"]) for row in sample_rows],
             is_categorical=detect_categorical(distinct_count, total),
         )
 
@@ -210,7 +199,7 @@ class MySQLDataSource(DataSource):
             columns = [ResultColumn(name=desc[0], data_type="") for desc in (cur.description or [])]
         truncated = len(rows) > limit
         rows = rows[:limit]
-        jsonable = [{k: _to_jsonable(v) for k, v in row.items()} for row in rows]
+        jsonable = [{k: to_jsonable(v) for k, v in row.items()} for row in rows]
         return QueryResult(
             columns=columns,
             rows=jsonable,

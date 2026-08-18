@@ -25,3 +25,16 @@ def configure_logging(level: str = "INFO") -> None:
 
 def get_logger(name: str = "nomadata") -> structlog.stdlib.BoundLogger:
     return structlog.get_logger(name)
+
+
+def describe_exception(exc: BaseException) -> str:
+    """A message that is never empty.
+
+    ``str(TimeoutError())`` and ``str(CancelledError())`` are both ``""``, so a
+    log line built from ``str(exc)`` reported a failure with no cause at all —
+    the exact case that made an enrichment batch fail invisibly. The type name
+    is always worth something, so fall back to it.
+    """
+    message = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {message}" if message else name

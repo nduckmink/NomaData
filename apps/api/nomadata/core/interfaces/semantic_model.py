@@ -27,8 +27,14 @@ class SemanticModel(ABC):
         """Load the latest graph (any status) for editing, or None if none exists."""
 
     @abstractmethod
-    async def save_draft(self, graph: SemanticGraph) -> SemanticGraph:
-        """Persist a new draft version and return it (with its assigned version)."""
+    async def save_draft(
+        self, graph: SemanticGraph, *, expected_revision: int | None = None
+    ) -> SemanticGraph:
+        """Persist the open draft and return it.
+
+        ``expected_revision`` makes the write conditional on nobody else having
+        saved since the caller loaded it.
+        """
 
     @abstractmethod
     async def publish(self, graph: SemanticGraph) -> PublishResult:

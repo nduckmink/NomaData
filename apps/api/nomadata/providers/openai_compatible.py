@@ -149,9 +149,7 @@ class OpenAICompatibleProvider(AIProvider):
             usage=data.get("usage", {}) or {},
         )
 
-    async def generate_structured(
-        self, messages: list[Message], schema: type[T], **opts: Any
-    ) -> T:
+    async def generate_structured(self, messages: list[Message], schema: type[T], **opts: Any) -> T:
         """Return a validated ``schema`` instance. JSON mode + schema-in-prompt,
         validated with Pydantic; one retry that feeds the error back to the model."""
         schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
@@ -194,9 +192,7 @@ class OpenAICompatibleProvider(AIProvider):
                 last_error = str(exc)[:500]
                 log.warning("ai.structured.invalid", attempt=attempt, error=last_error)
 
-        raise AIProviderError(
-            f"AI provider did not return valid {schema.__name__}: {last_error}"
-        )
+        raise AIProviderError(f"AI provider did not return valid {schema.__name__}: {last_error}")
 
     async def tool_call(
         self, messages: list[Message], tools: list[ToolSpec], **opts: Any

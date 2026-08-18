@@ -25,6 +25,7 @@ from nomadata.query.cube import CubeQueryEngine
 from nomadata.semantic.jobs import SemanticJobRunner
 from nomadata.semantic.service import SemanticModelService
 from nomadata.storage.ai_config_repo import AIConfigRepository
+from nomadata.storage.context_repo import BusinessContextRepository
 from nomadata.storage.data_source_repo import DataSourceRepository
 from nomadata.storage.database import Database
 from nomadata.storage.semantic_repo import SemanticRepository
@@ -42,9 +43,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # gracefully if the app DB is unavailable — the API still serves /health.
     registry = get_registry()
     # Cube query engine — holds config only; run() fails cleanly if Cube is down.
-    registry.set_query_engine(
-        CubeQueryEngine(settings.cube_url, settings.cube_api_secret)
-    )
+    registry.set_query_engine(CubeQueryEngine(settings.cube_url, settings.cube_api_secret))
     database: Database | None = None
     manager: DataSourceManager | None = None
     ai_manager: AIProviderManager | None = None
@@ -54,7 +53,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await database.connect()
             semantic_service = SemanticModelService(SemanticRepository(database))
             registry.set_semantic_model(semantic_service)
-            app.state.semantic_jobs = SemanticJobRunner(registry, semantic_service)
+            contexts = BusinessContextRepository(database)
+            app.state.semantic_contexts = contexts
+            app.state.semantic_jobs = SemanticJobRunner(registry, semantic_service, contexts)
             manager = DataSourceManager(DataSourceRepository(database), registry)
             count = await manager.load_all()
             app.state.datasource_manager = manager

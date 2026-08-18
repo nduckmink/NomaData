@@ -11,9 +11,7 @@ def test_translates_all_parts() -> None:
         measures=["orders.revenue"],
         dimensions=["orders.status"],
         filters=[Filter(field="orders.status", operator="eq", value="SUCCESS")],
-        time=TimeSpec(
-            dimension="orders.created_at", range="this_year", grain=TimeGrain.month
-        ),
+        time=TimeSpec(dimension="orders.created_at", range="this_year", grain=TimeGrain.month),
         limit=10,
         order_by=["-orders.revenue"],
     )

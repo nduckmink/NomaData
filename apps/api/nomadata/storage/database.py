@@ -38,6 +38,30 @@ CREATE TABLE IF NOT EXISTS semantic_models (
 CREATE INDEX IF NOT EXISTS ix_semantic_models_source
     ON semantic_models (source_id, version DESC);
 
+-- Saving a draft updates its row in place (revision +1) instead of inserting a
+-- new version, so a model doesn't reach v9 before it has ever been published.
+ALTER TABLE semantic_models ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE semantic_models ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+-- Older builds inserted one draft row per save. Collapse them to the newest
+-- before the one-draft-per-source rule can be enforced.
+DELETE FROM semantic_models a USING semantic_models b
+ WHERE a.status = 'draft' AND b.status = 'draft'
+   AND a.source_id = b.source_id AND a.version < b.version;
+-- At most one open draft per source; published versions are immutable snapshots.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_semantic_models_draft
+    ON semantic_models (source_id) WHERE status = 'draft';
+
+-- What the AI needs to know about this business before it can name anything.
+CREATE TABLE IF NOT EXISTS semantic_contexts (
+    source_id TEXT PRIMARY KEY,
+    domain TEXT NOT NULL DEFAULT '',
+    glossary TEXT NOT NULL DEFAULT '',
+    conventions TEXT NOT NULL DEFAULT '',
+    language TEXT NOT NULL DEFAULT 'en',
+    instructions TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS ai_config (
     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     provider TEXT NOT NULL DEFAULT 'openai_compatible',

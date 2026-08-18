@@ -109,9 +109,7 @@ class CubeQueryEngine(QueryEngine):
         # Cube answers a not-yet-ready query with {"error": "Continue wait"} and
         # HTTP 200 — retry a few times before giving up.
         for _ in range(10):
-            resp = await client.post(
-                f"{self._url}/cubejs-api/v1/load", json=body, headers=headers
-            )
+            resp = await client.post(f"{self._url}/cubejs-api/v1/load", json=body, headers=headers)
             payload: dict[str, Any] = resp.json() if resp.content else {}
             if resp.status_code == 200 and payload.get("error") != "Continue wait":
                 if "error" in payload:

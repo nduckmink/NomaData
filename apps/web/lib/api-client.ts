@@ -215,15 +215,51 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
 
 // ---------- Semantic model ----------
 
+export type DimensionKind = "time" | "number" | "string" | "boolean"
+
+/** Where a value came from, and whether AI may overwrite it. `user` or
+ *  `locked` means hands off — that is how an edit survives a re-enrichment. */
+export interface Provenance {
+  origin: "heuristic" | "ai" | "user"
+  locked: boolean
+}
+
+export const USER_OWNED: Provenance = { origin: "user", locked: false }
+
 export interface Dimension {
   name: string
   column: string
+  kind: DimensionKind
+  data_type: string
+  hidden: boolean
   description?: string | null
+  distinct_count?: number | null
+  /** Real values from the database — used to populate filter value pickers. */
+  sample_values: unknown[]
+  provenance: Provenance
 }
+
+/** Operators the whole stack can execute. Anything else is rejected server-side
+ *  rather than degraded to `eq`, which would return a wrong number silently. */
+export const FILTER_OPERATORS = [
+  "eq",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "in",
+  "not_in",
+  "contains",
+  "set",
+  "not_set",
+] as const
+
+export type FilterOperator = (typeof FILTER_OPERATORS)[number]
 
 export interface MetricFilter {
   field: string
-  operator: string
+  operator: FilterOperator
   value: unknown
 }
 
@@ -238,35 +274,43 @@ export type Aggregation =
 export type MetricKind = "base" | "derived"
 
 export interface MetricDefinition {
+  /** Stable handle. Names are labels and may change; nothing references them. */
+  id: string
   name: string
   description?: string | null
   kind: MetricKind
   // base
-  entity?: string | null
+  entity_key?: string | null
   aggregation?: Aggregation | null
   column?: string | null
-  filters?: MetricFilter[]
+  filters: MetricFilter[]
   time_dimension?: string | null
   // derived
   expression?: string | null
   // display
   format?: string | null
+  provenance: Provenance
 }
 
 export interface Relationship {
-  from_entity: string
-  to_entity: string
+  from_entity_key: string
+  to_entity_key: string
   from_column: string
   to_column: string
   kind: string
 }
 
 export interface Entity {
+  /** Immutable identity. `name` is the label and is free to change. */
+  key: string
   name: string
   table: string
+  schema_name: string
   primary_key: string
   dimensions: Dimension[]
   description?: string | null
+  hidden: boolean
+  provenance: Provenance
 }
 
 export interface SemanticGraph {
@@ -276,7 +320,73 @@ export interface SemanticGraph {
   relationships: Relationship[]
   version: number
   published: boolean
+  /** Bumped on every draft save; send it back to detect a concurrent edit. */
+  revision: number
   provenance: "ai" | "heuristic"
+  /** Tables left out of the model, with the reason (e.g. no primary key). */
+  skipped_tables: { table: string; reason: string }[]
+  /** Tables the model was built from. Empty = the whole catalog. */
+  scope_tables: string[]
+}
+
+export interface ValidationIssue {
+  level: "error" | "warning"
+  code: string
+  message: string
+  target?: string | null
+  target_kind?: string | null
+}
+
+export interface ValidationReport {
+  ok: boolean
+  issues: ValidationIssue[]
+}
+
+/** What the AI needs to know about this business before it can name anything. */
+export interface BusinessContext {
+  source_id: string
+  domain: string
+  glossary: string
+  conventions: string
+  language: string
+  instructions: string
+}
+
+export interface EntityDraftResponse {
+  name: string
+  description: string
+  /** Fields the AI changed — highlight these so the user knows what to check. */
+  changed_fields: string[]
+  reasoning: string
+  warnings: string[]
+}
+
+export interface MetricDraftResponse {
+  metric: MetricDefinition
+  /** Fields the AI filled or changed — highlight these in the form. */
+  changed_fields: string[]
+  reasoning: string
+  warnings: string[]
+}
+
+export interface MetricSuggestResponse {
+  metrics: MetricDefinition[]
+  /** Why each metric was proposed, in the same order. */
+  reasons: string[]
+  warnings: string[]
+}
+
+export interface MetricPreview {
+  metric_id: string
+  value: unknown
+  row_count?: number | null
+  /** The span of the metric's time column across the matched rows — this is
+   *  what reveals a metric measured by the wrong date. */
+  period_start?: unknown
+  period_end?: unknown
+  time_column?: string | null
+  sql: string
+  error?: string | null
 }
 
 export interface SemanticModelVersion {
@@ -293,27 +403,31 @@ export interface GenerationJob {
   done: number
   total: number
   error?: string | null
+  /** Naming batches that failed. The build still succeeded — those entities
+   *  kept their heuristic names — but "partly named" must not read as "named". */
+  failed_batches: number
+  last_batch_error?: string | null
 }
 
-/** Start a background build (heuristic + optional AI enrichment). Poll with
- *  getJob; when done the draft is saved, reload it with getSemanticDraft. */
+/** Start a background build (profile + heuristic + optional AI enrichment).
+ *  Poll with getJob; when done the draft is saved, reload it with
+ *  getSemanticDraft.
+ *
+ *  `tables` limits the model to a chosen scope — a 124-table database produces
+ *  a model nobody can review. `keepEdits` folds the rebuild onto the existing
+ *  draft so reviewed work is not discarded. */
 export async function startGenerate(
   name: string,
-  useAi = true
+  useAi = true,
+  { tables, keepEdits = true }: { tables?: string[]; keepEdits?: boolean } = {}
 ): Promise<GenerationJob> {
-  const params = new URLSearchParams({ use_ai: String(useAi) })
+  const params = new URLSearchParams({
+    use_ai: String(useAi),
+    keep_edits: String(keepEdits),
+  })
+  if (tables?.length) params.set("tables", tables.join(","))
   const res = await fetch(
     `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/generate?${params}`,
-    { method: "POST" }
-  )
-  if (!res.ok) throw new Error(await errorDetail(res))
-  return (await res.json()) as GenerationJob
-}
-
-/** Start a background AI re-enrichment of the current draft. */
-export async function startEnhance(name: string): Promise<GenerationJob> {
-  const res = await fetch(
-    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/enhance`,
     { method: "POST" }
   )
   if (!res.ok) throw new Error(await errorDetail(res))
@@ -354,6 +468,11 @@ export interface SemanticModelSummary {
   entity_count: number
   metric_count: number
   relationship_count: number
+  /** Structural validation counts (no DB hit) — errors block a publish. */
+  error_count: number
+  warning_count: number
+  /** A draft exists that is newer than the published model. */
+  has_unpublished_changes: boolean
 }
 
 /** Cross-source overview: one row per data source with its model status. */
@@ -376,12 +495,17 @@ export async function getSemanticDraft(
   )
 }
 
+/** Save the working draft. Sends the revision the client loaded, so a second
+ *  tab editing the same model gets a 409 instead of silently winning. */
 export async function saveSemanticDraft(
   name: string,
   graph: SemanticGraph
 ): Promise<SemanticGraph> {
+  const params = new URLSearchParams({
+    expected_revision: String(graph.revision),
+  })
   const res = await fetch(
-    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic`,
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic?${params}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -431,36 +555,15 @@ export async function deleteSemantic(name: string): Promise<void> {
   if (!res.ok) throw new Error(await errorDetail(res))
 }
 
-/** Introspect the source schema and propose a draft semantic model. Not saved
- *  — the caller reviews it, then persists/publishes separately. */
-export async function suggestSemantic(
-  name: string,
-  { useAi = true }: { useAi?: boolean } = {}
-): Promise<SemanticGraph> {
-  const params = new URLSearchParams({ use_ai: String(useAi) })
-  const res = await fetch(
-    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/suggest?${params}`,
-    { method: "POST" }
-  )
-  if (!res.ok) throw new Error(await errorDetail(res))
-  return (await res.json()) as SemanticGraph
-}
-
-export interface EnrichmentHints {
-  entities: { table: string; name: string; description: string }[]
-  metrics: { key: string; name: string; definition: string }[]
-}
-
-/** Compact AI business text (name + description/definition) for the entities and
- *  metrics in `graph`, matched back by table/formula. Send a manageable slice;
- *  the caller batches. Throws 409 when no AI provider is configured. */
-export async function enrichSemantic(
+/** Check a graph for anything that would break at query time. Errors block a
+ *  publish; warnings are advisory. */
+export async function validateSemantic(
   name: string,
   graph: SemanticGraph,
   signal?: AbortSignal
-): Promise<EnrichmentHints> {
+): Promise<ValidationReport> {
   const res = await fetch(
-    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/enrich`,
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/validate`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -469,7 +572,144 @@ export async function enrichSemantic(
     }
   )
   if (!res.ok) throw new Error(await errorDetail(res))
-  return (await res.json()) as EnrichmentHints
+  return (await res.json()) as ValidationReport
+}
+
+// ---------- Business context ----------
+
+export async function getBusinessContext(
+  name: string,
+  signal?: AbortSignal
+): Promise<BusinessContext> {
+  return getJSON<BusinessContext>(
+    `/api/v1/datasources/${encodeURIComponent(name)}/semantic/context`,
+    signal
+  )
+}
+
+export async function saveBusinessContext(
+  name: string,
+  context: BusinessContext
+): Promise<BusinessContext> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/context`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(context),
+    }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return (await res.json()) as BusinessContext
+}
+
+// ---------- Metric authoring ----------
+
+/** Describe a metric in words and get a filled-in definition back.
+ *
+ *  Nothing is saved: the caller fills its form with the result, the user checks
+ *  it (ideally with previewMetric) and presses Save. Pass `base` to edit an
+ *  existing metric instead of creating one. */
+export async function draftMetric(
+  name: string,
+  body: {
+    prompt: string
+    base?: MetricDefinition | null
+    entity_key?: string | null
+  },
+  signal?: AbortSignal
+): Promise<MetricDraftResponse> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/metrics/draft`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return (await res.json()) as MetricDraftResponse
+}
+
+/** Describe one entity in words and get its business name and description.
+ *
+ *  Text only — the table, its columns and its key come from the database and
+ *  are not negotiable. Nothing is saved; the editor fills its fields. */
+export async function draftEntity(
+  name: string,
+  body: { prompt: string; entity_key: string },
+  signal?: AbortSignal
+): Promise<EntityDraftResponse> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/entities/draft`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return (await res.json()) as EntityDraftResponse
+}
+
+/** Propose the metrics worth tracking on one entity.
+ *
+ *  Scoped to one entity because most tables in a large schema are lookups
+ *  nobody measures. Nothing is saved — the user picks what to keep. */
+export async function suggestMetrics(
+  name: string,
+  body: { entity_key: string; limit?: number },
+  signal?: AbortSignal
+): Promise<MetricSuggestResponse> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/metrics/suggest`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return (await res.json()) as MetricSuggestResponse
+}
+
+/** Joins implied by column names that the model does not have yet.
+ *
+ *  Rule-based, not an AI call: a wrong join pairs unrelated rows silently, so
+ *  ambiguous names are skipped rather than guessed. Nothing is saved. */
+export async function suggestRelationships(
+  name: string,
+  signal?: AbortSignal
+): Promise<Relationship[]> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/relationships/suggest`,
+    { method: "POST", signal }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return (await res.json()) as Relationship[]
+}
+
+/** Run one metric against the real database and return the number. Works on an
+ *  unsaved draft — which is exactly when "is this right?" needs answering. */
+export async function previewMetric(
+  name: string,
+  metric: MetricDefinition,
+  signal?: AbortSignal
+): Promise<MetricPreview> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/semantic/metrics/preview`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(metric),
+      signal,
+    }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return (await res.json()) as MetricPreview
 }
 
 // ---------- AI provider config ----------

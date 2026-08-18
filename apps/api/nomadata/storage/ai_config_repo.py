@@ -30,8 +30,7 @@ class AIConfigRepository:
     async def get(self) -> AIProviderConfig | None:
         async with self._db.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT provider, base_url, api_key, api_key_env, model "
-                "FROM ai_config WHERE id = 1"
+                "SELECT provider, base_url, api_key, api_key_env, model FROM ai_config WHERE id = 1"
             )
         return _row_to_config(row) if row else None
 
