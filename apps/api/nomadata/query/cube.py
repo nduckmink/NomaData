@@ -123,6 +123,10 @@ def build_cube_query(query: AnalyticalQuery) -> dict[str, Any]:
         cube["filters"] = [_filter(f) for f in query.filters]
     if query.time is not None:
         cube["timeDimensions"] = [_time_dimension(query.time)]
+        # Cube reads relative periods in this zone; left unset it uses UTC, and
+        # in UTC+7 the first seven hours of every day fall in the day before.
+        if query.time.timezone:
+            cube["timezone"] = query.time.timezone
     # Always send a limit: an absent one means Cube's own default, which is
     # far larger than anything a caller here is prepared to handle.
     cube["limit"] = row_limit(query)

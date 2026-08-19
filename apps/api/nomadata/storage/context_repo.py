@@ -13,7 +13,7 @@ from typing import Any
 from nomadata.core.models import BusinessContext
 from nomadata.storage.database import Database
 
-_COLUMNS = "source_id, domain, glossary, conventions, language, instructions"
+_COLUMNS = "source_id, domain, glossary, conventions, language, instructions, timezone"
 
 
 def _to_context(row: Any) -> BusinessContext | None:
@@ -26,6 +26,7 @@ def _to_context(row: Any) -> BusinessContext | None:
         conventions=row["conventions"],
         language=row["language"],
         instructions=row["instructions"],
+        timezone=row["timezone"],
     )
 
 
@@ -44,11 +45,12 @@ class BusinessContextRepository:
         async with self._db.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "INSERT INTO semantic_contexts "
-                f"({_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6) "
+                f"({_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7) "
                 "ON CONFLICT (source_id) DO UPDATE SET "
                 "domain=EXCLUDED.domain, glossary=EXCLUDED.glossary, "
                 "conventions=EXCLUDED.conventions, language=EXCLUDED.language, "
-                "instructions=EXCLUDED.instructions, updated_at=now() "
+                "instructions=EXCLUDED.instructions, timezone=EXCLUDED.timezone, "
+                "updated_at=now() "
                 f"RETURNING {_COLUMNS}",
                 context.source_id,
                 context.domain,
@@ -56,6 +58,7 @@ class BusinessContextRepository:
                 context.conventions,
                 context.language,
                 context.instructions,
+                context.timezone,
             )
         saved = _to_context(row)
         assert saved is not None  # RETURNING always yields a row

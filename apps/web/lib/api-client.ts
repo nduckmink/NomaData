@@ -373,6 +373,10 @@ export interface BusinessContext {
   conventions: string
   language: string
   instructions: string
+  /** IANA zone the data's timestamps are read in — decides what "this month"
+   *  means. Left at UTC, a UTC+7 database reports the first seven hours of
+   *  every day against the previous day. */
+  timezone: string
 }
 
 export interface EntityDraftResponse {

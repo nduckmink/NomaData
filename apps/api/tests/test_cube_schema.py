@@ -296,9 +296,7 @@ def test_map_and_model_always_agree_on_names() -> None:
     model = yaml.safe_load(generate_cube_yaml(graph))
     mapping = member_map(graph)
 
-    real = {
-        f"{cube['name']}.{m['name']}" for cube in model["cubes"] for m in cube["measures"]
-    }
+    real = {f"{cube['name']}.{m['name']}" for cube in model["cubes"] for m in cube["measures"]}
     assert set(mapping.measures.values()) == real
 
     real_dims = {

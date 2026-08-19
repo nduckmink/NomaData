@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS semantic_contexts (
     instructions TEXT NOT NULL DEFAULT '',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- The zone this source's timestamps are read in; decides what "this month" means.
+ALTER TABLE semantic_contexts ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 
 CREATE TABLE IF NOT EXISTS ai_config (
     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),

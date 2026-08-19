@@ -17,6 +17,7 @@ from nomadata.core.interfaces.semantic_model import SemanticModel
 from nomadata.core.models import (
     Aggregation,
     AnalyticalQuery,
+    BusinessContext,
     Dimension,
     DimensionKind,
     Entity,
@@ -167,9 +168,7 @@ def test_a_question_asked_in_business_names_runs(wired: _Engine) -> None:
 
 def test_an_unknown_metric_is_a_400_with_a_suggestion(wired: _Engine) -> None:
     """The caller can act on this; a Cube "member not found" they cannot."""
-    response = client.post(
-        "/api/v1/datasources/scp/query", json={"measures": ["Học phí da thu"]}
-    )
+    response = client.post("/api/v1/datasources/scp/query", json={"measures": ["Học phí da thu"]})
 
     assert response.status_code == 400
     detail = response.json()["detail"]
@@ -181,12 +180,54 @@ def test_a_source_without_a_published_model_says_so() -> None:
     get_registry().set_semantic_model(_Semantic(None))
     get_registry().set_query_engine(_Engine())
 
-    response = client.post(
-        "/api/v1/datasources/scp/query", json={"measures": ["Học phí đã thu"]}
-    )
+    response = client.post("/api/v1/datasources/scp/query", json={"measures": ["Học phí đã thu"]})
 
     assert response.status_code == 404
     assert "publish one first" in response.json()["detail"]
+
+
+def test_the_source_timezone_is_stamped_onto_a_relative_period(
+    wired: _Engine,
+) -> None:
+    """The caller says "this month" without a zone; the source's context knows
+    which one. Left to Cube it would be UTC, and in UTC+7 the first seven hours
+    of every day belong to the day before."""
+
+    class _Contexts:
+        async def get(self, name: str) -> BusinessContext:
+            return BusinessContext(source_id=name, timezone="Asia/Ho_Chi_Minh")
+
+    app.state.semantic_contexts = _Contexts()
+    try:
+        client.post(
+            "/api/v1/datasources/scp/query",
+            json={
+                "measures": ["Học phí đã thu"],
+                "time": {"dimension": "", "range": "this_month"},
+            },
+        )
+        assert wired.compiled["timezone"] == "Asia/Ho_Chi_Minh"
+    finally:
+        del app.state.semantic_contexts
+
+
+def test_a_caller_supplied_timezone_wins(wired: _Engine) -> None:
+    class _Contexts:
+        async def get(self, name: str) -> BusinessContext:
+            return BusinessContext(source_id=name, timezone="Asia/Ho_Chi_Minh")
+
+    app.state.semantic_contexts = _Contexts()
+    try:
+        client.post(
+            "/api/v1/datasources/scp/query",
+            json={
+                "measures": ["Học phí đã thu"],
+                "time": {"dimension": "", "range": "this_month", "timezone": "UTC"},
+            },
+        )
+        assert wired.compiled["timezone"] == "UTC"
+    finally:
+        del app.state.semantic_contexts
 
 
 def test_the_row_ceiling_is_always_applied(wired: _Engine) -> None:

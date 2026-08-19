@@ -12,6 +12,7 @@ from datetime import date
 from enum import StrEnum
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -304,6 +305,26 @@ RELATIVE_RANGES = frozenset(
 )
 
 
+def validate_timezone(value: str) -> str:
+    """An IANA zone name, or an error naming it.
+
+    A relative period only means something in a timezone: "this month" asked at
+    05:00 in Vietnam is still July in UTC, so the first seven hours of every day
+    land in the wrong month. Letting a mistyped zone fall back to UTC would
+    reintroduce exactly that, silently.
+    """
+    name = value.strip()
+    if not name:
+        raise ValueError("A timezone is required; use 'UTC' if the data is UTC.")
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(
+            f"Unknown timezone {value!r} — use an IANA name like 'Asia/Ho_Chi_Minh'."
+        ) from exc
+    return name
+
+
 class TimeSpec(BaseModel):
     """Which date column a query is measured over, and across what period.
 
@@ -319,6 +340,14 @@ class TimeSpec(BaseModel):
     since: date | None = None
     until: date | None = None
     grain: TimeGrain | None = None
+    #: The zone a relative period is measured in. Filled from the source's
+    #: business context when the caller does not say — see `validate_timezone`.
+    timezone: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_timezone(cls, value: str | None) -> str | None:
+        return None if value is None else validate_timezone(value)
 
     @field_validator("range")
     @classmethod
@@ -647,6 +676,15 @@ class BusinessContext(BaseModel):
     # always English; this only controls the content the model writes.
     language: str = "en"
     instructions: str = ""  # free-form preferences
+    #: The zone this database's timestamps are read in. It decides what "this
+    #: month" means: in UTC+7 the first seven hours of every day fall in the
+    #: previous UTC day, and at a month boundary in the previous month.
+    timezone: str = "UTC"
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        return validate_timezone(value)
 
     def is_empty(self) -> bool:
         return not any(

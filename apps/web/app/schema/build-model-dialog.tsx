@@ -48,6 +48,13 @@ const LANGUAGES = [
   { value: "vi", label: "Vietnamese" },
 ]
 
+/** The browser's own zone is the best first guess: someone setting up a
+ *  database usually sits in the same place as the data. */
+const LOCAL_TIMEZONE =
+  typeof Intl !== "undefined"
+    ? (Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC")
+    : "UTC"
+
 const EMPTY: BusinessContext = {
   source_id: "",
   domain: "",
@@ -55,6 +62,7 @@ const EMPTY: BusinessContext = {
   conventions: "",
   language: "en",
   instructions: "",
+  timezone: LOCAL_TIMEZONE,
 }
 
 type Mode = "generate" | "rebuild" | "edit"
@@ -119,7 +127,9 @@ export function BuildModelDialog({
     void (async () => {
       try {
         const loaded = await getBusinessContext(source, controller.signal)
-        if (!controller.signal.aborted) setContext(loaded)
+        if (!controller.signal.aborted) {
+          setContext({ ...loaded, timezone: loaded.timezone || LOCAL_TIMEZONE })
+        }
       } catch {
         // A missing context is an empty form, not an error.
       }
@@ -270,6 +280,19 @@ export function BuildModelDialog({
                 </option>
               ))}
             </select>
+          </Field>
+
+          <Field
+            label="Time zone of this data"
+            hint={`Decides what "this month" means. Detected: ${LOCAL_TIMEZONE}.`}
+          >
+            <Input
+              value={context.timezone}
+              onChange={(e) => set({ timezone: e.target.value })}
+              placeholder={LOCAL_TIMEZONE}
+              aria-label="Time zone"
+              className="w-64 font-mono text-sm"
+            />
           </Field>
 
           <Field

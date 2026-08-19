@@ -74,9 +74,7 @@ def test_every_known_operator_can_be_translated(operator: str) -> None:
     """Walks the whole operator set, so adding one without teaching this
     adapter fails here instead of silently becoming `equals` in production."""
     value = None if operator in VALUELESS_OPERATORS else "X"
-    query = AnalyticalQuery(
-        filters=[Filter(field="orders.status", operator=operator, value=value)]
-    )
+    query = AnalyticalQuery(filters=[Filter(field="orders.status", operator=operator, value=value)])
 
     [compiled] = build_cube_query(query)["filters"]
 
@@ -98,9 +96,7 @@ def test_negations_are_not_flattened_into_equality() -> None:
 
 
 def test_presence_operators_send_no_values() -> None:
-    query = AnalyticalQuery(
-        filters=[Filter(field="orders.paid_at", operator="not_set")]
-    )
+    query = AnalyticalQuery(filters=[Filter(field="orders.paid_at", operator="not_set")])
 
     [compiled] = build_cube_query(query)["filters"]
 
@@ -144,7 +140,7 @@ def test_an_invented_range_is_refused_at_the_edge() -> None:
 
 
 def test_range_spelling_is_normalised() -> None:
-    """"This Month" and "this-month" mean the same thing as "this_month"."""
+    """ "This Month" and "this-month" mean the same thing as "this_month"."""
     assert TimeSpec(dimension="d", range="This Month").range == "this_month"
     assert TimeSpec(dimension="d", range="last-week").range == "last_week"
 
@@ -185,3 +181,49 @@ def test_a_time_axis_without_a_period_covers_everything() -> None:
 
     assert td["granularity"] == "month"
     assert "dateRange" not in td
+
+
+# ----------------------------------------------------------------------
+# Timezone — what "this month" actually means
+# ----------------------------------------------------------------------
+
+
+def test_a_relative_period_carries_its_timezone() -> None:
+    """Cube reads relative periods in UTC unless told otherwise. In UTC+7 that
+    puts the first seven hours of every day in the day before — and at a month
+    boundary, in the previous month."""
+    query = AnalyticalQuery(
+        measures=["orders.revenue"],
+        time=TimeSpec(dimension="orders.paid_at", range="this_month", timezone="Asia/Ho_Chi_Minh"),
+    )
+
+    assert build_cube_query(query)["timezone"] == "Asia/Ho_Chi_Minh"
+
+
+def test_an_unknown_timezone_is_refused_not_ignored() -> None:
+    """Falling back to UTC on a typo is the silent-wrong-number path again."""
+    with pytest.raises(ValidationError, match="Unknown timezone"):
+        TimeSpec(dimension="d", range="this_month", timezone="Asia/Saigonn")
+
+
+def test_no_timezone_means_no_key_rather_than_a_guess() -> None:
+    query = AnalyticalQuery(measures=["orders.revenue"], time=TimeSpec(dimension="orders.paid_at"))
+    assert "timezone" not in build_cube_query(query)
+
+
+def test_an_exact_window_carries_the_zone_too() -> None:
+    """Two ISO dates still need a zone: "2026-08-01 to 2026-08-31" starts at
+    midnight somewhere."""
+    query = AnalyticalQuery(
+        measures=["orders.revenue"],
+        time=TimeSpec(
+            dimension="orders.paid_at",
+            since=date(2026, 8, 1),
+            until=date(2026, 8, 31),
+            timezone="Asia/Ho_Chi_Minh",
+        ),
+    )
+
+    compiled = build_cube_query(query)
+    assert compiled["timezone"] == "Asia/Ho_Chi_Minh"
+    assert compiled["timeDimensions"][0]["dateRange"] == ["2026-08-01", "2026-08-31"]

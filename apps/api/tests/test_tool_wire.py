@@ -24,9 +24,7 @@ def test_a_plain_message_stays_plain() -> None:
 def test_assistant_turn_carries_its_tool_calls() -> None:
     message = Message(
         role=Role.assistant,
-        tool_calls=[
-            ToolCall(id="call_1", name="run_query", arguments={"measures": ["Học phí"]})
-        ],
+        tool_calls=[ToolCall(id="call_1", name="run_query", arguments={"measures": ["Học phí"]})],
     )
 
     [item] = _wire([message])
