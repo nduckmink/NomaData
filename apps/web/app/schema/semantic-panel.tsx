@@ -73,6 +73,7 @@ import {
   MasterDetail,
   MasterList,
   PromptBox,
+  relSignature,
   TabLabel,
   ReadOnlyValue,
   USER,
@@ -399,7 +400,15 @@ export function SemanticPanel({ source }: { source: string }) {
       if (prior === undefined) metrics.set(m.id, "new")
       else if (prior !== JSON.stringify(m)) metrics.set(m.id, "edited")
     }
-    return { entities, metrics }
+    // Relationships have no stable id, so they are diffed by signature. A row
+    // whose signature is not in the saved set is unsaved (added, found, or
+    // edited — an edit changes the signature); the count also picks up removals.
+    const savedRelSigs = new Set((saved?.relationships ?? []).map(relSignature))
+    const liveRelSigs = new Set((graph?.relationships ?? []).map(relSignature))
+    let relationships = 0
+    for (const s of liveRelSigs) if (!savedRelSigs.has(s)) relationships++
+    for (const s of savedRelSigs) if (!liveRelSigs.has(s)) relationships++
+    return { entities, metrics, relationships, savedRelSigs }
   }, [graph, saved])
 
   const entityNames = useMemo(
@@ -506,12 +515,16 @@ export function SemanticPanel({ source }: { source: string }) {
             {graph.published ? "published" : "draft"}
           </Badge>
           <span className="tnum">v{graph.version}</span>
-          {dirty && (
-            <span className="text-accent-brand">
-              {changes.entities.size + changes.metrics.size || ""} unsaved change
-              {changes.entities.size + changes.metrics.size === 1 ? "" : "s"}
-            </span>
-          )}
+          {dirty &&
+            (() => {
+              const n =
+                changes.entities.size + changes.metrics.size + changes.relationships
+              return (
+                <span className="text-accent-brand">
+                  {n || ""} unsaved change{n === 1 ? "" : "s"}
+                </span>
+              )
+            })()}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <BuildModelDialog
@@ -555,7 +568,11 @@ export function SemanticPanel({ source }: { source: string }) {
             warnings={warnings.length}
             graph={graph}
             busy={action === "publish"}
-            disabled={action !== null || errors.length > 0}
+            // Nothing to publish when the live model already matches what is on
+            // screen — re-publishing an unchanged model would only bump the
+            // version for no reason.
+            nothingToPublish={graph.published && !dirty}
+            disabled={action !== null || errors.length > 0 || (graph.published && !dirty)}
             onConfirm={publish}
           />
           <DeleteButton onConfirm={remove} busy={action === "delete"} source={source} />
@@ -585,7 +602,7 @@ export function SemanticPanel({ source }: { source: string }) {
             <TabLabel
               label="Relationships"
               count={graph.relationships.length}
-              unsaved={0}
+              unsaved={changes.relationships}
             />
           </TabsTrigger>
         </TabsList>
@@ -697,6 +714,7 @@ export function SemanticPanel({ source }: { source: string }) {
             source={source}
             entities={graph.entities}
             relationships={graph.relationships}
+            savedSignatures={changes.savedRelSigs}
             onChange={setRelationships}
           />
         </TabsContent>
@@ -1003,6 +1021,7 @@ function PublishButton({
   graph,
   busy,
   disabled,
+  nothingToPublish,
   onConfirm,
 }: {
   errors: number
@@ -1010,16 +1029,18 @@ function PublishButton({
   graph: SemanticGraph
   busy: boolean
   disabled: boolean
+  nothingToPublish?: boolean
   onConfirm: () => void
 }) {
+  const title = errors > 0
+    ? "Fix the problems above first"
+    : nothingToPublish
+      ? "Already published — nothing to publish"
+      : "Publish this model"
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>
-        <Button
-          size="sm"
-          disabled={disabled}
-          title={errors > 0 ? "Fix the problems above first" : "Publish this model"}
-        >
+        <Button size="sm" disabled={disabled} title={title}>
           {busy ? (
             <RiLoader4Line data-icon="inline-start" className="animate-spin" />
           ) : (

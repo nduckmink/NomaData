@@ -32,7 +32,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 
-import { MiniSelect } from "./semantic-fields"
+import { MiniSelect, relSignature } from "./semantic-fields"
+import { cn } from "@/lib/utils"
 
 const KINDS = [
   { value: "many_to_one", label: "many → one" },
@@ -44,15 +45,25 @@ export function RelationshipEditor({
   source,
   entities,
   relationships,
+  savedSignatures,
   onChange,
 }: {
   source: string
   entities: Entity[]
   relationships: Relationship[]
+  /** Signatures of the last-saved links, so a row not among them shows as
+   *  unsaved — the same "new / edited" cue the entity and metric lists use. */
+  savedSignatures: Set<string>
   onChange: (next: Relationship[]) => void
 }) {
   const [finding, setFinding] = useState(false)
   const byKey = new Map(entities.map((e) => [e.key, e]))
+  // An entity is far easier to verify by its table than by a business name like
+  // "Người dùng (Nhân viên)" — so the picker shows both.
+  const entityOptions = entities.map((e) => ({
+    value: e.key,
+    label: `${e.name} · ${e.table}`,
+  }))
 
   const columnsOf = (key: string) => {
     const entity = byKey.get(key)
@@ -134,21 +145,35 @@ export function RelationshipEditor({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {relationships.map((r, i) => (
-              <TableRow key={`${r.from_entity_key}-${r.from_column}-${r.to_entity_key}-${i}`}>
+            {relationships.map((r, i) => {
+              const isNew = !savedSignatures.has(relSignature(r))
+              return (
+              <TableRow
+                key={`${r.from_entity_key}-${r.from_column}-${r.to_entity_key}-${i}`}
+                className={cn(isNew && "bg-accent-brand/5")}
+              >
                 <TableCell>
-                  <MiniSelect
-                    value={r.from_entity_key}
-                    onChange={(v) =>
-                      update(i, {
-                        from_entity_key: v,
-                        from_column: byKey.get(v)?.primary_key ?? "",
-                      })
-                    }
-                    label="From entity"
-                    options={entities.map((e) => ({ value: e.key, label: e.name }))}
-                    className="w-full"
-                  />
+                  <span className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "size-1.5 shrink-0 rounded-full",
+                        isNew ? "bg-accent-brand" : "bg-transparent"
+                      )}
+                      title={isNew ? "Unsaved" : undefined}
+                    />
+                    <MiniSelect
+                      value={r.from_entity_key}
+                      onChange={(v) =>
+                        update(i, {
+                          from_entity_key: v,
+                          from_column: byKey.get(v)?.primary_key ?? "",
+                        })
+                      }
+                      label="From entity"
+                      options={entityOptions}
+                      className="w-full"
+                    />
+                  </span>
                 </TableCell>
                 <TableCell>
                   <MiniSelect
@@ -172,7 +197,7 @@ export function RelationshipEditor({
                       })
                     }
                     label="To entity"
-                    options={entities.map((e) => ({ value: e.key, label: e.name }))}
+                    options={entityOptions}
                     className="w-full"
                   />
                 </TableCell>
@@ -208,7 +233,8 @@ export function RelationshipEditor({
                   </Button>
                 </TableCell>
               </TableRow>
-            ))}
+              )
+            })}
             {relationships.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="text-sm text-muted-foreground">

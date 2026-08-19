@@ -465,3 +465,16 @@ export function TabLabel({
     </span>
   )
 }
+
+/** A relationship's identity for change tracking — it has no stable id, so an
+ *  edit reads as the old signature leaving and a new one arriving. Shared so
+ *  the panel (diff) and the editor (per-row "new" marker) agree exactly. */
+export function relSignature(r: {
+  from_entity_key: string
+  from_column: string
+  to_entity_key: string
+  to_column: string
+  kind: string
+}): string {
+  return `${r.from_entity_key}|${r.from_column}|${r.to_entity_key}|${r.to_column}|${r.kind}`
+}

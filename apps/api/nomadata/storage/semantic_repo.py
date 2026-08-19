@@ -127,6 +127,12 @@ class SemanticRepository:
 
         The open draft becomes that snapshot, so publishing does not leave a
         stale draft claiming to be newer than what is live.
+
+        Publishing is only ever meaningful when there is an open draft — that is
+        the pending work. Once a model is published, editing it opens a fresh
+        draft; so "no open draft" means nothing has changed since the live
+        version, and re-publishing must NOT mint a new version (the UI disables
+        the button, and this is the matching guard for any other caller).
         """
         async with self._db.pool.acquire() as conn, conn.transaction():
             existing = await conn.fetchrow(
@@ -142,22 +148,33 @@ class SemanticRepository:
                     stored.source_id,
                     _jsonb(stored),
                 )
-            else:
-                row = await conn.fetchrow(
-                    "SELECT COALESCE(MAX(version), 0) AS v FROM semantic_models WHERE source_id=$1",
-                    graph.source_id,
+                return PublishResult(source_id=stored.source_id, version=version, published=True)
+
+            # No open draft: the newest thing is already published.
+            published = await conn.fetchrow(
+                "SELECT MAX(version) AS v FROM semantic_models "
+                "WHERE source_id=$1 AND status='published'",
+                graph.source_id,
+            )
+            if published is not None and published["v"] is not None:
+                # Nothing to publish — return the live version unchanged.
+                return PublishResult(
+                    source_id=graph.source_id,
+                    version=int(published["v"]),
+                    published=True,
                 )
-                version = int(row["v"]) + 1
-                stored = graph.model_copy(update={"version": version, "published": True})
-                await conn.execute(
-                    "INSERT INTO semantic_models "
-                    "(source_id, version, status, graph, revision) "
-                    "VALUES ($1, $2, 'published', $3::jsonb, 1)",
-                    stored.source_id,
-                    version,
-                    _jsonb(stored),
-                )
-            return PublishResult(source_id=stored.source_id, version=version, published=True)
+
+            # Truly empty (never published, no draft) — a first publish. Rare via
+            # the UI, which builds a draft first, but keep it correct.
+            stored = graph.model_copy(update={"version": 1, "published": True})
+            await conn.execute(
+                "INSERT INTO semantic_models "
+                "(source_id, version, status, graph, revision) "
+                "VALUES ($1, 1, 'published', $2::jsonb, 1)",
+                stored.source_id,
+                _jsonb(stored),
+            )
+            return PublishResult(source_id=stored.source_id, version=1, published=True)
 
     async def get_latest(self, source_id: str) -> SemanticGraph | None:
         """The open draft if there is one, else the newest published version."""
