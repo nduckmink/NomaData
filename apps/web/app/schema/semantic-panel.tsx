@@ -89,6 +89,28 @@ const humanize = (id: string) =>
     .map((w) => (w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
     .join(" ")
 
+const ACTION_FAILED = {
+  save: "Could not save the draft",
+  publish: "Cannot publish this model",
+  delete: "Could not delete the model",
+} as const
+
+/** Show a server message that may be several lines.
+ *
+ *  A failed publish lists every metric blocking it; a toast title is one line,
+ *  so the detail goes in `description` where it stays readable instead of being
+ *  clipped into uselessness. */
+function showError(title: string, error: unknown) {
+  const text = error instanceof Error ? error.message : ""
+  const [first, ...rest] = text.split("\n")
+  const description =
+    rest.length ? rest.join("\n") : first && first !== title ? first : undefined
+  toast.error(rest.length ? first || title : title, {
+    description,
+    duration: rest.length ? 10_000 : undefined,
+  })
+}
+
 const emptyMetric = (entityKey: string | null): MetricDefinition => ({
   id: crypto.randomUUID().replace(/-/g, ""),
   name: "",
@@ -292,7 +314,7 @@ export function SemanticPanel({ source }: { source: string }) {
     try {
       await fn()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Action failed")
+      showError(ACTION_FAILED[kind], e)
     } finally {
       setAction(null)
       setProgress(null)

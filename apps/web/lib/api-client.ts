@@ -151,10 +151,30 @@ async function sendDataSource(
   return (await res.json()) as DataSourceInfo
 }
 
+/** The server's own message, whatever shape `detail` took.
+ *
+ *  FastAPI lets `detail` be a string or any JSON value, and the publish gate
+ *  uses an object so it can name every metric that blocks the publish. Reading
+ *  that as a string produced "[object Object]" at the one moment the message
+ *  mattered most, so both shapes are handled here — the single place every
+ *  request funnels its errors through. */
 async function errorDetail(res: Response): Promise<string> {
   try {
-    const body = (await res.json()) as { detail?: string }
-    if (body?.detail) return body.detail
+    const body = (await res.json()) as { detail?: unknown }
+    const detail = body?.detail
+    if (typeof detail === "string") return detail
+    if (detail && typeof detail === "object") {
+      const { message, issues } = detail as {
+        message?: string
+        issues?: { message?: string }[]
+      }
+      const lines = (issues ?? [])
+        .map((i) => i?.message)
+        .filter((m): m is string => !!m)
+        .map((m) => `• ${m}`)
+      const text = [message, ...lines].filter(Boolean).join("\n")
+      if (text) return text
+    }
   } catch {
     // fall through to status-based message
   }
@@ -207,8 +227,11 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
     signal,
     cache: "no-store",
   })
+  // Reuse the shared reader rather than inventing a status-only message: the
+  // server explains *why* ("app database not connected"), and throwing
+  // "API returned 503" threw that explanation away on every GET.
   if (!res.ok) {
-    throw new Error(`API returned ${res.status}`)
+    throw new Error(await errorDetail(res))
   }
   return (await res.json()) as T
 }
