@@ -28,7 +28,16 @@ from nomadata.logging import get_logger
 log = get_logger()
 
 # NomaData filter operator -> Cube filter operator.
-_FILTER_OP = {
+#
+# Every member of ``FILTER_OPERATORS`` must appear here. A missing entry used to
+# fall back to "equals", which turns `not_in` into its own opposite and answers
+# with a number that looks entirely normal — the failure mode this codebase
+# treats as worse than a crash. A test walks the whole set so adding an operator
+# without teaching this adapter fails loudly.
+#
+# Cube's `equals` takes a list of values, so it is also the correct translation
+# of `in` (and `notEquals` of `not_in`).
+_FILTER_OP: dict[str, str] = {
     "eq": "equals",
     "neq": "notEquals",
     "gt": "gt",
@@ -36,8 +45,23 @@ _FILTER_OP = {
     "lt": "lt",
     "lte": "lte",
     "in": "equals",
+    "not_in": "notEquals",
     "contains": "contains",
+    "set": "set",
+    "not_set": "notSet",
 }
+
+#: Operators that assert on presence, not on a value — Cube rejects a `values`
+#: key for these.
+_VALUELESS_CUBE_OPS = frozenset({"set", "notSet"})
+
+#: Rows a single query may return. Without a ceiling, "list every contract"
+#: pulls Cube's default 10,000 rows through the API and, in an agent loop, into
+#: the model's context on the next turn.
+MAX_ROWS = 1000
+
+#: Rows requested when the caller names no limit.
+DEFAULT_ROWS = 200
 
 
 class QueryEngineError(NomaDataError):
@@ -45,12 +69,26 @@ class QueryEngineError(NomaDataError):
 
 
 def _filter(f: Filter) -> dict[str, Any]:
+    operator = _FILTER_OP.get(f.operator)
+    if operator is None:
+        # Never guess: a wrong operator produces a plausible, wrong number.
+        raise QueryEngineError(
+            f"Filter operator {f.operator!r} cannot be run by the query engine."
+        )
+    if operator in _VALUELESS_CUBE_OPS:
+        return {"member": f.field, "operator": operator}
     values = f.value if isinstance(f.value, list) else [f.value]
     return {
         "member": f.field,
-        "operator": _FILTER_OP.get(f.operator, "equals"),
+        "operator": operator,
         "values": [str(v) for v in values],
     }
+
+
+def row_limit(query: AnalyticalQuery) -> int:
+    """The row ceiling actually applied — the caller's limit, capped."""
+    requested = query.limit if query.limit and query.limit > 0 else DEFAULT_ROWS
+    return min(requested, MAX_ROWS)
 
 
 def build_cube_query(query: AnalyticalQuery) -> dict[str, Any]:
@@ -69,8 +107,9 @@ def build_cube_query(query: AnalyticalQuery) -> dict[str, Any]:
         if query.time.range:
             td["dateRange"] = query.time.range.replace("_", " ")
         cube["timeDimensions"] = [td]
-    if query.limit is not None:
-        cube["limit"] = query.limit
+    # Always send a limit: an absent one means Cube's own default, which is
+    # far larger than anything a caller here is prepared to handle.
+    cube["limit"] = row_limit(query)
     if query.order_by:
         cube["order"] = [
             [o.lstrip("-"), "desc" if o.startswith("-") else "asc"] for o in query.order_by
@@ -101,7 +140,15 @@ class CubeQueryEngine(QueryEngine):
 
         rows: list[dict[str, Any]] = data.get("data", [])
         columns = self._columns(rows, data)
-        return QueryResult(columns=columns, rows=rows, row_count=len(rows))
+        # Hitting the ceiling means there was probably more; say so rather than
+        # letting a partial answer read as a complete one.
+        limit = row_limit(query)
+        return QueryResult(
+            columns=columns,
+            rows=rows,
+            row_count=len(rows),
+            truncated=len(rows) >= limit,
+        )
 
     async def _load(
         self, client: httpx.AsyncClient, headers: dict[str, str], body: dict[str, Any]

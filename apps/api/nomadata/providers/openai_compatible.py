@@ -43,6 +43,43 @@ class AIProviderError(NomaDataError):
     """The AI provider failed to respond or returned unusable output."""
 
 
+def _wire(messages: list[Message]) -> list[dict[str, Any]]:
+    """Core ``Message`` objects as OpenAI chat-completion messages.
+
+    The wire format is this module's business, not ``core``'s. Two rules matter:
+    an assistant turn carries ``tool_calls`` with the ids the provider issued,
+    and a tool reply carries ``tool_call_id`` — without both the model cannot
+    match a result to its request, and the agent loop ends after one call.
+    Empty fields are dropped: some OpenAI-compatible endpoints reject a null
+    ``tool_call_id`` or an empty ``tool_calls`` array.
+    """
+    wire: list[dict[str, Any]] = []
+    for message in messages:
+        item: dict[str, Any] = {"role": str(message.role), "content": message.content}
+        if message.tool_calls:
+            item["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                    },
+                }
+                for call in message.tool_calls
+            ]
+            # An assistant turn that only asks for tools has no prose; some
+            # endpoints want the key present but null rather than "".
+            if not message.content:
+                item["content"] = None
+        if message.tool_call_id:
+            item["tool_call_id"] = message.tool_call_id
+        if message.name:
+            item["name"] = message.name
+        wire.append(item)
+    return wire
+
+
 class OpenAICompatibleProvider(AIProvider):
     def __init__(
         self,
@@ -138,7 +175,7 @@ class OpenAICompatibleProvider(AIProvider):
     async def chat(self, messages: list[Message], **opts: Any) -> ChatResponse:
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": [m.model_dump() for m in messages],
+            "messages": _wire(messages),
             **opts,
         }
         data = await self._post_chat(payload)
@@ -180,7 +217,7 @@ class OpenAICompatibleProvider(AIProvider):
                 )
             payload: dict[str, Any] = {
                 "model": self._model,
-                "messages": [m.model_dump() for m in convo],
+                "messages": _wire(convo),
                 "response_format": {"type": "json_object"},
                 **opts,
             }
@@ -199,7 +236,7 @@ class OpenAICompatibleProvider(AIProvider):
     ) -> ToolCallResponse:
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": [m.model_dump() for m in messages],
+            "messages": _wire(messages),
             "tools": [
                 {
                     "type": "function",
@@ -224,8 +261,16 @@ class OpenAICompatibleProvider(AIProvider):
                     arguments = json.loads(arguments)
                 except ValueError:
                     arguments = {}
-            calls.append(ToolCall(name=fn.get("name", ""), arguments=arguments))
-        return ToolCallResponse(tool_calls=calls, content=message.get("content"))
+            calls.append(
+                # The id is what lets the result be matched back to this call.
+                ToolCall(id=raw.get("id", ""), name=fn.get("name", ""), arguments=arguments)
+            )
+        return ToolCallResponse(
+            tool_calls=calls,
+            content=message.get("content"),
+            model=data.get("model", self._model),
+            usage=data.get("usage", {}) or {},
+        )
 
 
 def _strip_fences(text: str) -> str:

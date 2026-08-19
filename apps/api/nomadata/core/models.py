@@ -26,9 +26,39 @@ class Role(StrEnum):
     tool = "tool"
 
 
+class ToolCall(BaseModel):
+    """A tool the model asked to run.
+
+    ``id`` is assigned by the provider and must travel back with the result, or
+    the model cannot tell which call is being answered. Empty means the provider
+    does not use call ids.
+    """
+
+    id: str = ""
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
 class Message(BaseModel):
+    """One turn in a conversation with the model.
+
+    An agent loop needs more than ``{role, content}``: the assistant's turn has
+    to carry the tool calls it asked for, and the reply has to say which call it
+    answers. Without both, a tool result cannot be handed back and the loop
+    stops after one call.
+
+    These fields describe the *conversation*, not any provider's wire format —
+    turning them into a request body is the provider's job.
+    """
+
     role: Role
-    content: str
+    content: str = ""
+    #: Tool calls the assistant asked for (``role=assistant``).
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    #: Which call this message answers (``role=tool``).
+    tool_call_id: str | None = None
+    #: Name of the tool that produced this content (``role=tool``).
+    name: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -43,14 +73,13 @@ class ToolSpec(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)  # JSON schema
 
 
-class ToolCall(BaseModel):
-    name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
-
-
 class ToolCallResponse(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     content: str | None = None
+    # An agent turn costs several of these. Reporting usage here — as `chat`
+    # already does — is what makes the price of a question measurable at all.
+    model: str = ""
+    usage: dict[str, int] = Field(default_factory=dict)
 
 
 class ProviderCapabilities(BaseModel):
