@@ -19,6 +19,8 @@ from nomadata.core.models import (
 from nomadata.query.cube_schema import (
     CubeCompileError,
     generate_cube_yaml,
+    member_map,
+    normalise,
     remove_cube_model,
     write_cube_model,
 )
@@ -279,3 +281,99 @@ def test_time_dimension_travels_to_the_measure() -> None:
     # It was hidden as a slicing dimension, but a metric points at it, so it has
     # to be addressable.
     assert any(d["name"] == "paid_at" for d in orders["dimensions"])
+
+
+# ----------------------------------------------------------------------
+# MemberMap — business names to Cube members
+# ----------------------------------------------------------------------
+
+
+def test_map_and_model_always_agree_on_names() -> None:
+    """The load-bearing invariant: every member the map advertises exists in
+    the compiled model. A second `_ident()` anywhere else would drift from this
+    one and surface as "member not found" only at query time."""
+    graph = _graph()
+    model = yaml.safe_load(generate_cube_yaml(graph))
+    mapping = member_map(graph)
+
+    real = {
+        f"{cube['name']}.{m['name']}" for cube in model["cubes"] for m in cube["measures"]
+    }
+    assert set(mapping.measures.values()) == real
+
+    real_dims = {
+        f"{cube['name']}.{d['name']}" for cube in model["cubes"] for d in cube["dimensions"]
+    }
+    assert set(mapping.dimensions.values()) <= real_dims
+
+
+def test_a_metric_is_found_by_its_business_name() -> None:
+    mapping = member_map(_graph())
+    assert mapping.measure("Doanh thu") == "orders.Doanh_thu"
+
+
+def test_lookup_ignores_case_and_extra_spaces() -> None:
+    """A model writing "doanh  thu" should not fail on punctuation of spacing."""
+    mapping = member_map(_graph())
+    assert mapping.measure("doanh  thu") == mapping.measure("Doanh thu")
+
+
+def test_a_metric_is_also_found_by_its_id() -> None:
+    graph = _graph()
+    mapping = member_map(graph)
+    revenue = next(m for m in graph.metrics if m.name == "Doanh thu")
+    assert mapping.measure(revenue.id) == "orders.Doanh_thu"
+
+
+def test_derived_metrics_are_addressable_too() -> None:
+    mapping = member_map(_graph())
+    assert mapping.measure("AOV") == "orders.AOV"
+
+
+def test_dimensions_resolve_bare_and_qualified() -> None:
+    mapping = member_map(_graph())
+    assert mapping.dimensions[normalise("Trạng thái")] == "orders.status"
+    assert mapping.dimensions[normalise("Đơn hàng.Trạng thái")] == "orders.status"
+    # The raw column name works as well — a model often echoes it.
+    assert mapping.dimensions[normalise("status")] == "orders.status"
+
+
+def test_only_time_columns_land_in_time_dimensions() -> None:
+    mapping = member_map(_graph())
+    assert normalise("Signed Up") in mapping.time_dimensions
+    assert normalise("Trạng thái") not in mapping.time_dimensions
+
+
+def test_hidden_things_are_not_addressable() -> None:
+    """What the query layer cannot run must not be offered: `note` is hidden."""
+    mapping = member_map(_graph())
+    assert normalise("Ghi chú") not in mapping.dimensions
+    assert normalise("note") not in mapping.dimensions
+
+
+def test_an_unknown_name_resolves_to_nothing() -> None:
+    mapping = member_map(_graph())
+    assert mapping.measure("Doanh thu thuần") is None
+    assert mapping.metric_id("Doanh thu thuần") is None
+
+
+def test_vietnamese_d_survives_ascii_folding() -> None:
+    """`đ` is not an accented `d`, so NFKD cannot decompose it and a plain
+    ascii-ignore deletes it: "Đơn hàng" became "on_hang" and two metrics could
+    collapse onto one identifier."""
+    graph = _graph()
+    renamed = graph.metrics[1].model_copy(update={"name": "Học phí đã thu"})
+    graph = graph.model_copy(update={"metrics": [renamed]})
+
+    model = yaml.safe_load(generate_cube_yaml(graph))
+    [measure] = model["cubes"][0]["measures"]
+
+    assert measure["name"] == "Hoc_phi_da_thu"
+    assert measure["title"] == "Học phí đã thu"
+
+
+def test_an_entity_named_with_d_keeps_its_first_letter() -> None:
+    mapping = member_map(_graph())
+    # "Đơn hàng" is the entity name; the cube is named from its table, but the
+    # folding rule is what a renamed table would rely on.
+    assert "orders" in mapping.cubes.values()

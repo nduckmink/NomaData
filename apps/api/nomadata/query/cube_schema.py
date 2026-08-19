@@ -27,12 +27,15 @@ import unicodedata
 from pathlib import Path
 
 import yaml
+from pydantic import BaseModel, Field
 
 from nomadata.core.models import (
     VALUELESS_OPERATORS,
     Aggregation,
     DimensionKind,
+    Entity,
     Filter,
+    MetricDefinition,
     MetricKind,
     SemanticGraph,
 )
@@ -68,12 +71,20 @@ class CubeCompileError(Exception):
     """The graph contains something Cube cannot be asked to run."""
 
 
+#: Letters that are not an accented form of an ASCII letter, so decomposition
+#: cannot reach them and ``encode("ascii", "ignore")`` deletes them outright.
+#: Without this, ``Đơn hàng`` folds to ``on_hang`` and ``Học phí đã thu`` to
+#: ``Hoc_phi_a_thu`` — unreadable, and two metrics can collapse onto one
+#: identifier. ``đ`` is one of the commonest letters in Vietnamese.
+_STANDALONE_LETTERS = str.maketrans({"đ": "d", "Đ": "D", "ð": "d", "Ø": "O", "ø": "o"})
+
+
 def _ident(text: str) -> str:
     """A safe Cube identifier: ASCII letters/digits/underscore, starting with a
     letter. Vietnamese names are folded (``Tỷ lệ hủy`` → ``Ty_le_huy``) because
     Cube identifiers must be ASCII — Python's ``\\w`` would have let the accents
     through and Cube would reject the model."""
-    folded = unicodedata.normalize("NFKD", text.strip())
+    folded = unicodedata.normalize("NFKD", text.strip().translate(_STANDALONE_LETTERS))
     ascii_only = folded.encode("ascii", "ignore").decode("ascii")
     cleaned = re.sub(r"\W+", "_", ascii_only).strip("_")
     if not cleaned or not cleaned[0].isalpha():
@@ -150,52 +161,95 @@ def _derived_sql(expression: str, measure_names: dict[str, str]) -> str:
     return rewritten
 
 
-def build_cube_model(graph: SemanticGraph) -> dict:
-    """Return the Cube model as a plain dict (``{"cubes": [...]}``)."""
-    entities = [e for e in graph.entities if not e.hidden]
-    by_key = {e.key: e for e in entities}
 
-    metrics_by_entity: dict[str, list] = {}
+def _unique(name: str, used: set[str]) -> str:
+    """``name``, suffixed until it is unused. Cube identifiers must be unique
+    across the model, and two tables can fold to the same ASCII identifier."""
+    candidate, index = name, 2
+    while candidate in used:
+        candidate, index = f"{name}_{index}", index + 1
+    used.add(candidate)
+    return candidate
+
+
+def visible_entities(graph: SemanticGraph) -> list[Entity]:
+    """Entities that reach the query layer. Hidden ones do not exist to it."""
+    return [e for e in graph.entities if not e.hidden]
+
+
+def cube_names(graph: SemanticGraph) -> dict[str, str]:
+    """Entity key -> cube identifier.
+
+    The single source of truth for what an entity is called in Cube. Both the
+    generated model and the member map read it, because a second `_ident()`
+    somewhere else would drift from this one the moment either changes — and
+    the drift would show up as "member not found" at query time.
+    """
+    used: set[str] = set()
+    return {e.key: _unique(_ident(e.table), used) for e in visible_entities(graph)}
+
+
+def _base_metrics_by_entity(
+    graph: SemanticGraph, by_key: dict[str, Entity]
+) -> dict[str, list[MetricDefinition]]:
+    grouped: dict[str, list[MetricDefinition]] = {}
     for m in graph.metrics:
         if m.kind != MetricKind.base or m.aggregation is None:
             continue
         if m.entity_key in by_key:
-            metrics_by_entity.setdefault(m.entity_key, []).append(m)
+            grouped.setdefault(m.entity_key or "", []).append(m)
+    return grouped
 
-    # A derived metric belongs to the cube its parts belong to. One that spans
-    # cubes cannot be expressed as a calculated measure, so it is skipped here
-    # and reported by the validator.
+
+def _derived_by_entity(
+    graph: SemanticGraph, by_key: dict[str, Entity]
+) -> dict[str, list[MetricDefinition]]:
+    """Derived metrics, grouped by the cube they can live in.
+
+    Cube builds a calculated measure inside one cube, so a formula whose parts
+    sit on different entities is left out here and reported by the validator.
+    """
     base_names = {
         m.name: m.entity_key
         for m in graph.metrics
         if m.kind == MetricKind.base and m.entity_key in by_key and m.name.strip()
     }
-    derived_by_entity: dict[str, list] = {}
+    grouped: dict[str, list[MetricDefinition]] = {}
     for m in graph.metrics:
         if m.kind != MetricKind.derived or not (m.expression or "").strip():
             continue
-        parts = _referenced_metrics(m.expression or "", list(base_names))
-        owners = {base_names[p] for p in parts}
+        owners = {
+            base_names[p] for p in _referenced_metrics(m.expression or "", list(base_names))
+        }
         if len(owners) == 1:
-            derived_by_entity.setdefault(owners.pop() or "", []).append(m)
+            grouped.setdefault(owners.pop() or "", []).append(m)
+    return grouped
 
-    # Cube identifiers must be unique across the model.
-    cube_names: dict[str, str] = {}
-    used_cubes: set[str] = set()
-    for entity in entities:
-        name = _ident(entity.table)
-        base, index = name, 2
-        while name in used_cubes:
-            name, index = f"{base}_{index}", index + 1
-        used_cubes.add(name)
-        cube_names[entity.key] = name
+
+def _measure_names(
+    entity_key: str,
+    base: list[MetricDefinition],
+    derived: list[MetricDefinition],
+) -> dict[str, str]:
+    """Metric id -> measure identifier within one cube, in emit order."""
+    used: set[str] = set()
+    return {m.id: _unique(_ident(m.name), used) for m in [*base, *derived]}
+
+
+def build_cube_model(graph: SemanticGraph) -> dict:
+    """Return the Cube model as a plain dict (``{"cubes": [...]}``)."""
+    entities = visible_entities(graph)
+    by_key = {e.key: e for e in entities}
+    metrics_by_entity = _base_metrics_by_entity(graph, by_key)
+    derived_by_entity = _derived_by_entity(graph, by_key)
+    names = cube_names(graph)
 
     cubes = []
     for entity in entities:
         # `data_source` tells Cube's driverFactory which connection (from the app
         # DB, configured in the UI) to run this cube against.
         cube: dict = {
-            "name": cube_names[entity.key],
+            "name": names[entity.key],
             "sql_table": _sql_table(entity.table, entity.schema_name),
             "data_source": graph.source_id,
         }
@@ -241,14 +295,17 @@ def build_cube_model(graph: SemanticGraph) -> dict:
             dimensions.append(dimension)
         cube["dimensions"] = dimensions
 
+        base_metrics = metrics_by_entity.get(entity.key, [])
+        derived_metrics = derived_by_entity.get(entity.key, [])
+        # One naming pass for both kinds, shared with `member_map` — the map and
+        # the model must call every measure the same thing.
+        measure_names = _measure_names(entity.key, base_metrics, derived_metrics)
+
         measures = []
-        used_measures: set[str] = set()
-        for m in metrics_by_entity.get(entity.key, []):
-            name = _ident(m.name)
-            base, index = name, 2
-            while name in used_measures:
-                name, index = f"{base}_{index}", index + 1
-            used_measures.add(name)
+        for m in base_metrics:
+            name = measure_names[m.id]
+            # `_base_metrics_by_entity` only yields metrics with an aggregation.
+            assert m.aggregation is not None
             measure: dict = {"name": name, "type": _CUBE_AGG[m.aggregation]}
             if m.name and m.name != name:
                 measure["title"] = m.name
@@ -270,16 +327,9 @@ def build_cube_model(graph: SemanticGraph) -> dict:
 
         # Calculated measures come last: they reference the identifiers the
         # base measures above were just given.
-        by_metric_name = {
-            m.name: measure["name"]
-            for m, measure in zip(metrics_by_entity.get(entity.key, []), measures, strict=True)
-        }
-        for m in derived_by_entity.get(entity.key, []):
-            name = _ident(m.name)
-            base, index = name, 2
-            while name in used_measures:
-                name, index = f"{base}_{index}", index + 1
-            used_measures.add(name)
+        by_metric_name = {m.name: measure_names[m.id] for m in base_metrics}
+        for m in derived_metrics:
+            name = measure_names[m.id]
             derived: dict = {
                 "name": name,
                 "type": "number",
@@ -297,14 +347,14 @@ def build_cube_model(graph: SemanticGraph) -> dict:
 
         joins = [
             {
-                "name": cube_names[r.to_entity_key],
+                "name": names[r.to_entity_key],
                 "relationship": r.kind,
                 "sql": (
-                    f"{{CUBE}}.{r.from_column} = {{{cube_names[r.to_entity_key]}}}.{r.to_column}"
+                    f"{{CUBE}}.{r.from_column} = {{{names[r.to_entity_key]}}}.{r.to_column}"
                 ),
             }
             for r in graph.relationships
-            if r.from_entity_key == entity.key and r.to_entity_key in cube_names
+            if r.from_entity_key == entity.key and r.to_entity_key in names
         ]
         if joins:
             cube["joins"] = joins
@@ -339,3 +389,89 @@ def remove_cube_model(source_id: str, model_dir: str) -> bool:
         path.unlink()
         return True
     return False
+
+
+class MemberMap(BaseModel):
+    """Business names -> Cube members, built from the published graph.
+
+    Three naming systems coexist: the business name a person and the model
+    speak, ``MetricDefinition.id`` which the graph stores, and the Cube member
+    that actually runs. M2.5 paid for mixing two of them once — an AI rename
+    orphaned every metric — so the translation lives here, beside the code that
+    invents the Cube names, and nowhere else.
+
+    Lookups by name are case- and space-insensitive: a model that writes
+    "học phí đã thu" should not fail because the metric is "Học phí đã thu".
+    """
+
+    #: metric id -> "Cube.measure"
+    measures: dict[str, str] = Field(default_factory=dict)
+    #: normalised metric name -> metric id
+    measure_ids: dict[str, str] = Field(default_factory=dict)
+    #: metric id -> the business name, for messages
+    measure_labels: dict[str, str] = Field(default_factory=dict)
+    #: normalised "Entity.Dimension" and bare "Dimension" -> "Cube.dim"
+    dimensions: dict[str, str] = Field(default_factory=dict)
+    #: the same, restricted to time dimensions
+    time_dimensions: dict[str, str] = Field(default_factory=dict)
+    #: entity key -> cube name, for building join-aware suggestions
+    cubes: dict[str, str] = Field(default_factory=dict)
+
+    def measure(self, name_or_id: str) -> str | None:
+        """The Cube member for a metric named or identified by ``name_or_id``."""
+        metric_id = self.measure_ids.get(normalise(name_or_id), name_or_id)
+        return self.measures.get(metric_id)
+
+    def metric_id(self, name_or_id: str) -> str | None:
+        normalised = self.measure_ids.get(normalise(name_or_id))
+        if normalised:
+            return normalised
+        return name_or_id if name_or_id in self.measures else None
+
+
+def normalise(name: str) -> str:
+    """Casefolded, whitespace-collapsed — what two names must share to match."""
+    return " ".join(name.split()).casefold()
+
+
+def member_map(graph: SemanticGraph) -> MemberMap:
+    """Build the name -> member translation for a published graph.
+
+    Only what the query layer can actually reach: hidden entities and hidden
+    dimensions are absent, because a name the model could pick but Cube cannot
+    run is worse than a name it never saw.
+    """
+    entities = visible_entities(graph)
+    by_key = {e.key: e for e in entities}
+    names = cube_names(graph)
+    base_by_entity = _base_metrics_by_entity(graph, by_key)
+    derived_by_entity = _derived_by_entity(graph, by_key)
+
+    result = MemberMap(cubes=dict(names))
+
+    for entity in entities:
+        cube = names[entity.key]
+        base = base_by_entity.get(entity.key, [])
+        derived = derived_by_entity.get(entity.key, [])
+        measure_names = _measure_names(entity.key, base, derived)
+
+        for metric in [*base, *derived]:
+            result.measures[metric.id] = f"{cube}.{measure_names[metric.id]}"
+            result.measure_labels[metric.id] = metric.name
+            if metric.name.strip():
+                result.measure_ids[normalise(metric.name)] = metric.id
+
+        # The primary key is addressable too — "how many distinct ids" is a
+        # reasonable thing to slice by.
+        members = [(entity.primary_key, entity.primary_key, DimensionKind.number)]
+        members += [
+            (d.name, d.column, d.kind) for d in entity.dimensions if not d.hidden
+        ]
+        for label, column, kind in members:
+            member = f"{cube}.{_ident(column)}"
+            for key in (f"{entity.name}.{label}", label, f"{entity.name}.{column}", column):
+                result.dimensions.setdefault(normalise(key), member)
+                if kind == DimensionKind.time:
+                    result.time_dimensions.setdefault(normalise(key), member)
+
+    return result

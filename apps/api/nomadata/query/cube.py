@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 import jwt
 
+from nomadata.agent.resolver import resolve
 from nomadata.core.errors import NomaDataError
 from nomadata.core.interfaces.query_engine import QueryEngine
 from nomadata.core.models import (
@@ -22,6 +23,7 @@ from nomadata.core.models import (
     Filter,
     QueryResult,
     ResultColumn,
+    SemanticGraph,
 )
 from nomadata.logging import get_logger
 
@@ -123,12 +125,20 @@ class CubeQueryEngine(QueryEngine):
         self._secret = api_secret
         self._timeout = timeout
 
-    async def plan(self, query: AnalyticalQuery) -> ExecutionPlan:
-        return ExecutionPlan(source_id="cube", representation=build_cube_query(query))
+    async def plan(self, query: AnalyticalQuery, graph: SemanticGraph) -> ExecutionPlan:
+        # Business names in, Cube members out — and every name checked against
+        # the published model before Cube ever sees it, so an unknown metric is
+        # a sentence the caller can act on rather than "Member not found".
+        resolved = resolve(query, graph)
+        return ExecutionPlan(
+            source_id=graph.source_id, representation=build_cube_query(resolved)
+        )
 
-    async def run(self, query: AnalyticalQuery) -> QueryResult:
-        plan = await self.plan(query)
-        token = jwt.encode({}, self._secret, algorithm="HS256")
+    async def run(self, query: AnalyticalQuery, graph: SemanticGraph) -> QueryResult:
+        plan = await self.plan(query, graph)
+        # Scoping the token by source is what will let Phase 6 restrict a
+        # caller to the data it is allowed to see.
+        token = jwt.encode({"source": graph.source_id}, self._secret, algorithm="HS256")
         headers = {"Authorization": token}
         body = {"query": plan.representation}
 
