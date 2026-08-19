@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
+from pydantic import ValidationError
 
 from nomadata.core.models import (
     FILTER_OPERATORS,
+    RELATIVE_RANGES,
     VALUELESS_OPERATORS,
     AnalyticalQuery,
     Filter,
@@ -113,3 +117,71 @@ def test_an_operator_the_engine_cannot_run_raises() -> None:
 
     with pytest.raises(QueryEngineError, match="between"):
         build_cube_query(query)
+
+
+# ----------------------------------------------------------------------
+# Time ranges — a controlled vocabulary, not free text
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("keyword", sorted(RELATIVE_RANGES))
+def test_every_relative_range_reaches_cube(keyword: str) -> None:
+    query = AnalyticalQuery(
+        measures=["orders.revenue"],
+        time=TimeSpec(dimension="orders.paid_at", range=keyword),
+    )
+
+    [td] = build_cube_query(query)["timeDimensions"]
+
+    assert td["dateRange"] == keyword.replace("_", " ")
+
+
+def test_an_invented_range_is_refused_at_the_edge() -> None:
+    """A model writing "thang_nay" or "last_3_months" must fail here with a
+    readable message, not deep inside Cube where it means nothing to the asker."""
+    with pytest.raises(ValidationError, match="Unknown time range"):
+        TimeSpec(dimension="orders.paid_at", range="last_3_months")
+
+
+def test_range_spelling_is_normalised() -> None:
+    """"This Month" and "this-month" mean the same thing as "this_month"."""
+    assert TimeSpec(dimension="d", range="This Month").range == "this_month"
+    assert TimeSpec(dimension="d", range="last-week").range == "last_week"
+
+
+def test_an_exact_window_travels_as_two_dates() -> None:
+    query = AnalyticalQuery(
+        measures=["orders.revenue"],
+        time=TimeSpec(
+            dimension="orders.paid_at",
+            since=date(2026, 1, 1),
+            until=date(2026, 6, 30),
+        ),
+    )
+
+    [td] = build_cube_query(query)["timeDimensions"]
+
+    assert td["dateRange"] == ["2026-01-01", "2026-06-30"]
+
+
+def test_half_a_window_is_refused() -> None:
+    with pytest.raises(ValidationError, match="both"):
+        TimeSpec(dimension="d", since=date(2026, 1, 1))
+
+
+def test_a_backwards_window_is_refused() -> None:
+    with pytest.raises(ValidationError, match="after"):
+        TimeSpec(dimension="d", since=date(2026, 6, 30), until=date(2026, 1, 1))
+
+
+def test_a_time_axis_without_a_period_covers_everything() -> None:
+    """Asking for a metric by month across all history is a real question."""
+    query = AnalyticalQuery(
+        measures=["orders.revenue"],
+        time=TimeSpec(dimension="orders.paid_at", grain=TimeGrain.month),
+    )
+
+    [td] = build_cube_query(query)["timeDimensions"]
+
+    assert td["granularity"] == "month"
+    assert "dateRange" not in td

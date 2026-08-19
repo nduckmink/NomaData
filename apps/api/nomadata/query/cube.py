@@ -24,6 +24,7 @@ from nomadata.core.models import (
     QueryResult,
     ResultColumn,
     SemanticGraph,
+    TimeSpec,
 )
 from nomadata.logging import get_logger
 
@@ -87,6 +88,24 @@ def _filter(f: Filter) -> dict[str, Any]:
     }
 
 
+def _time_dimension(spec: TimeSpec) -> dict[str, Any]:
+    """Translate a time window into Cube's `timeDimensions` entry.
+
+    An exact window is sent as a pair of ISO dates, which leaves nothing to
+    interpret. A relative keyword becomes the phrase Cube parses — and it can
+    only be a keyword, because `TimeSpec` rejects anything else at the edge
+    rather than letting an invented phrase fail deep inside Cube.
+    """
+    entry: dict[str, Any] = {"dimension": spec.dimension}
+    if spec.grain is not None:
+        entry["granularity"] = str(spec.grain)
+    if spec.is_absolute:
+        entry["dateRange"] = [spec.since.isoformat(), spec.until.isoformat()]  # type: ignore[union-attr]
+    elif spec.range:
+        entry["dateRange"] = spec.range.replace("_", " ")
+    return entry
+
+
 def row_limit(query: AnalyticalQuery) -> int:
     """The row ceiling actually applied — the caller's limit, capped."""
     requested = query.limit if query.limit and query.limit > 0 else DEFAULT_ROWS
@@ -103,12 +122,7 @@ def build_cube_query(query: AnalyticalQuery) -> dict[str, Any]:
     if query.filters:
         cube["filters"] = [_filter(f) for f in query.filters]
     if query.time is not None:
-        td: dict[str, Any] = {"dimension": query.time.dimension}
-        if query.time.grain is not None:
-            td["granularity"] = str(query.time.grain)
-        if query.time.range:
-            td["dateRange"] = query.time.range.replace("_", " ")
-        cube["timeDimensions"] = [td]
+        cube["timeDimensions"] = [_time_dimension(query.time)]
     # Always send a limit: an absent one means Cube's own default, which is
     # far larger than anything a caller here is prepared to handle.
     cube["limit"] = row_limit(query)

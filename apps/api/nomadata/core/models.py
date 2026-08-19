@@ -8,6 +8,7 @@ cross-cutting act. Grouped by architectural boundary.
 from __future__ import annotations
 
 import os
+from datetime import date
 from enum import StrEnum
 from typing import Any
 from uuid import uuid4
@@ -279,10 +280,70 @@ class TimeGrain(StrEnum):
     year = "year"
 
 
+#: Relative periods the whole stack agrees on. A caller — especially a model
+#: writing a query — will otherwise invent phrasings ("thang_nay", "last_3_months")
+#: that only fail deep inside the query engine, where the message means nothing
+#: to whoever asked. Anything outside this set is rejected at the edge.
+RELATIVE_RANGES = frozenset(
+    {
+        "today",
+        "yesterday",
+        "this_week",
+        "last_week",
+        "this_month",
+        "last_month",
+        "this_quarter",
+        "last_quarter",
+        "this_year",
+        "last_year",
+        "last_7_days",
+        "last_30_days",
+        "last_90_days",
+        "last_12_months",
+    }
+)
+
+
 class TimeSpec(BaseModel):
+    """Which date column a query is measured over, and across what period.
+
+    Two ways to say the period: a keyword from ``RELATIVE_RANGES``, or an exact
+    ``since``/``until`` window. Both may be absent — that means the whole
+    history, which is a legitimate thing to ask for.
+    """
+
     dimension: str
-    range: str | None = None  # e.g. "this_month", "2026", "last_7_days"
+    #: A keyword from RELATIVE_RANGES.
+    range: str | None = None
+    #: An exact window, inclusive at both ends. Wins over `range` if both given.
+    since: date | None = None
+    until: date | None = None
     grain: TimeGrain | None = None
+
+    @field_validator("range")
+    @classmethod
+    def _known_range(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalised = value.strip().lower().replace(" ", "_").replace("-", "_")
+        if normalised not in RELATIVE_RANGES:
+            raise ValueError(
+                f"Unknown time range {value!r}; expected one of "
+                f"{', '.join(sorted(RELATIVE_RANGES))}, or an exact since/until window."
+            )
+        return normalised
+
+    @model_validator(mode="after")
+    def _window_makes_sense(self) -> TimeSpec:
+        if (self.since is None) != (self.until is None):
+            raise ValueError("An exact window needs both `since` and `until`.")
+        if self.since and self.until and self.since > self.until:
+            raise ValueError(f"`since` ({self.since}) is after `until` ({self.until}).")
+        return self
+
+    @property
+    def is_absolute(self) -> bool:
+        return self.since is not None and self.until is not None
 
 
 #: Every operator the whole stack knows how to execute. An operator outside this

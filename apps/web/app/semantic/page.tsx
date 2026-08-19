@@ -238,9 +238,6 @@ function StatusBadge({ row }: { row: SemanticModelSummary }) {
       <span className="text-xs text-muted-foreground tnum">
         v{row.latest_version}
       </span>
-      {row.provenance && (
-        <span className="text-xs text-muted-foreground">{row.provenance}</span>
-      )}
       {/* A draft newer than what is live: the work here is not yet queryable. */}
       {row.has_unpublished_changes && (
         <span className="rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
