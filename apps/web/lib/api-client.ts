@@ -287,12 +287,7 @@ export interface MetricFilter {
 }
 
 export type Aggregation =
-  | "count"
-  | "count_distinct"
-  | "sum"
-  | "avg"
-  | "min"
-  | "max"
+  "count" | "count_distinct" | "sum" | "avg" | "min" | "max"
 
 export type MetricKind = "base" | "derived"
 
@@ -796,4 +791,68 @@ export async function deleteAIConfig(): Promise<void> {
     method: "DELETE",
   })
   if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+// ---------- Ask (conversational query) ----------
+
+export interface QueryTimeSpec {
+  dimension: string
+  range?: string | null
+  since?: string | null
+  until?: string | null
+  grain?: string | null
+  timezone?: string | null
+}
+
+/** The intermediate query behind an answer — business names, never SQL. */
+export interface AnalyticalQuery {
+  measures: string[]
+  dimensions: string[]
+  filters: { field: string; operator: string; value: unknown }[]
+  time?: QueryTimeSpec | null
+  limit?: number | null
+  order_by: string[]
+}
+
+export interface ResultColumn {
+  name: string
+  data_type: string
+}
+
+export interface QueryResult {
+  columns: ResultColumn[]
+  rows: Record<string, unknown>[]
+  row_count: number
+  truncated: boolean
+}
+
+/** One answered (or declined) question. `kind` decides which fields matter. */
+export interface AgentTurn {
+  kind: "answer" | "clarify" | "refuse" | "error"
+  question: string
+  query?: AnalyticalQuery | null
+  result?: QueryResult | null
+  answer: string
+  explanation: string
+  notes: string[]
+  clarification: string
+  reason: string
+}
+
+export async function ask(
+  name: string,
+  question: string,
+  signal?: AbortSignal
+): Promise<AgentTurn> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/ask`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+      signal,
+    }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return (await res.json()) as AgentTurn
 }

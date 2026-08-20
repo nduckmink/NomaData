@@ -5,6 +5,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
   type RemixiconComponentType,
+  RiChat3Line,
   RiDashboardLine,
   RiDatabase2Line,
   RiNodeTree,
@@ -36,12 +37,15 @@ type NavItem = {
 // Flat, only routes that exist. Data Source = schema explorer + connections;
 // Semantic Models = the cross-source model overview.
 const NAV: NavItem[] = [
+  // Ask is the product; the rest configure what it answers from.
+  { href: "/ask", label: "Ask", icon: RiChat3Line },
   { href: "/", label: "Overview", icon: RiDashboardLine },
   { href: "/schema", label: "Data Source", icon: RiDatabase2Line },
   { href: "/semantic", label: "Semantic Models", icon: RiNodeTree },
 ]
 
 const TITLES: Record<string, string> = {
+  "/ask": "Ask",
   "/": "Overview",
   "/schema": "Data Source",
   "/semantic": "Semantic Models",
