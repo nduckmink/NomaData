@@ -153,7 +153,7 @@ export function TablePicker({
         </Button>
       </div>
 
-      <ul className="flex max-h-64 flex-col overflow-y-auto border">
+      <ul className="flex max-h-[52vh] min-h-48 flex-col overflow-y-auto border">
         {visible.map((table) => (
           <li key={table.name}>
             <label
