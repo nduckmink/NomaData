@@ -1,0 +1,75 @@
+[
+  {
+    "question": "total amount advanced this month",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Advance Amount"],
+        "time": { "dimension": "", "range": "this_month" }
+      }
+    },
+    "expect": { "kind": "answer", "measures": ["Advance Amount"], "range": "this_month" }
+  },
+  {
+    "question": "advance amount this month, broken down by status",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Advance Amount"],
+        "dimensions": ["Status"],
+        "time": { "dimension": "", "range": "this_month" }
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Advance Amount"],
+      "dimensions": ["Status"],
+      "range": "this_month"
+    }
+  },
+  {
+    "question": "how many transactions are there",
+    "plan": { "kind": "query", "query": { "measures": ["Transaction Count"] } },
+    "expect": { "kind": "answer", "measures": ["Transaction Count"] }
+  },
+  {
+    "question": "advance amount by status",
+    "plan": {
+      "kind": "query",
+      "query": { "measures": ["Advance Amount"], "dimensions": ["Status"] }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Advance Amount"],
+      "dimensions": ["Status"]
+    }
+  },
+  {
+    "question": "transactions last month",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Transaction Count"],
+        "time": { "dimension": "", "range": "last_month" }
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Transaction Count"],
+      "range": "last_month"
+    }
+  },
+  {
+    "question": "what's the weather today",
+    "plan": { "kind": "refuse", "reason": "That is not about this data." },
+    "expect": { "kind": "refuse" }
+  },
+  {
+    "question": "show me revenue",
+    "plan": {
+      "kind": "clarify",
+      "clarification": "There's no 'Revenue' metric — did you mean Advance Amount?"
+    },
+    "expect": { "kind": "clarify" }
+  }
+]
