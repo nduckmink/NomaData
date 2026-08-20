@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import {
   RiChat3Line,
@@ -16,6 +16,11 @@ import {
   type QueryResult,
   type SemanticModelSummary,
 } from "@/lib/api-client"
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from "@/components/ai-elements/conversation"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -58,7 +63,6 @@ export default function AskPage() {
   const [exchanges, setExchanges] = useState<Exchange[]>([])
   const [input, setInput] = useState("")
   const [asking, setAsking] = useState(false)
-  const scrollRef = useRef<HTMLDivElement>(null)
 
   // Only sources with a published model can answer — the query layer reads what
   // was published, never a draft.
@@ -79,12 +83,6 @@ export default function AskPage() {
     })()
     return () => controller.abort()
   }, [])
-
-  // Keep the newest exchange in view. Pure DOM, so no setState-in-effect.
-  useEffect(() => {
-    const el = scrollRef.current
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
-  }, [exchanges])
 
   async function submit() {
     const question = input.trim()
@@ -169,17 +167,20 @@ export default function AskPage() {
           )}
         </div>
 
-        <div ref={scrollRef} className="flex-1 space-y-6 overflow-y-auto p-4">
-          {exchanges.length === 0 && (
-            <p className="pt-10 text-center text-sm text-muted-foreground">
-              Ask about {source} in plain language — e.g. a total this month,
-              broken down by a category.
-            </p>
-          )}
-          {exchanges.map((x, i) => (
-            <ExchangeView key={i} exchange={x} />
-          ))}
-        </div>
+        <Conversation className="min-h-0 flex-1">
+          <ConversationContent className="space-y-6">
+            {exchanges.length === 0 && (
+              <p className="pt-10 text-center text-sm text-muted-foreground">
+                Ask about {source} in plain language — e.g. a total this month,
+                broken down by a category.
+              </p>
+            )}
+            {exchanges.map((x, i) => (
+              <ExchangeView key={i} exchange={x} />
+            ))}
+          </ConversationContent>
+          <ConversationScrollButton />
+        </Conversation>
 
         <div className="border-t p-3">
           <div className="flex items-end gap-2">
