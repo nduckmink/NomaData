@@ -98,8 +98,7 @@ def resolve(query: AnalyticalQuery, graph: SemanticGraph) -> ResolvedQuery:
         measures=measures,
         dimensions=[_dimension(name, mapping) for name in query.dimensions],
         filters=[
-            f.model_copy(update={"field": _dimension(f.field, mapping)})
-            for f in query.filters
+            f.model_copy(update={"field": _dimension(f.field, mapping)}) for f in query.filters
         ],
         time=_time(query.time, chosen, mapping, notes),
         limit=query.limit,
@@ -157,10 +156,7 @@ def _time(
     # Measuring by another date is allowed — but the answer has to say so, since
     # the number itself gives no hint that it happened.
     if default and mapping.time_dimensions.get(normalise(default)) != member:
-        notes.append(
-            f"Measured by {wanted}, though this metric is normally measured by "
-            f"{default}."
-        )
+        notes.append(f"Measured by {wanted}, though this metric is normally measured by {default}.")
     return spec.model_copy(update={"dimension": member})
 
 

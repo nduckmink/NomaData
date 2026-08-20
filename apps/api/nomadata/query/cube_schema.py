@@ -161,7 +161,6 @@ def _derived_sql(expression: str, measure_names: dict[str, str]) -> str:
     return rewritten
 
 
-
 def _unique(name: str, used: set[str]) -> str:
     """``name``, suffixed until it is unused. Cube identifiers must be unique
     across the model, and two tables can fold to the same ASCII identifier."""
@@ -218,9 +217,7 @@ def _derived_by_entity(
     for m in graph.metrics:
         if m.kind != MetricKind.derived or not (m.expression or "").strip():
             continue
-        owners = {
-            base_names[p] for p in _referenced_metrics(m.expression or "", list(base_names))
-        }
+        owners = {base_names[p] for p in _referenced_metrics(m.expression or "", list(base_names))}
         if len(owners) == 1:
             grouped.setdefault(owners.pop() or "", []).append(m)
     return grouped
@@ -272,9 +269,7 @@ def build_cube_model(graph: SemanticGraph) -> dict:
         # A column some metric measures time by has to be published even if it
         # was hidden as a slicing dimension: the metric points at it.
         time_columns = {
-            m.time_dimension
-            for m in metrics_by_entity.get(entity.key, [])
-            if m.time_dimension
+            m.time_dimension for m in metrics_by_entity.get(entity.key, []) if m.time_dimension
         }
         for d in entity.dimensions:
             if d.hidden and d.column not in time_columns:
@@ -349,9 +344,7 @@ def build_cube_model(graph: SemanticGraph) -> dict:
             {
                 "name": names[r.to_entity_key],
                 "relationship": r.kind,
-                "sql": (
-                    f"{{CUBE}}.{r.from_column} = {{{names[r.to_entity_key]}}}.{r.to_column}"
-                ),
+                "sql": (f"{{CUBE}}.{r.from_column} = {{{names[r.to_entity_key]}}}.{r.to_column}"),
             }
             for r in graph.relationships
             if r.from_entity_key == entity.key and r.to_entity_key in names
@@ -464,9 +457,7 @@ def member_map(graph: SemanticGraph) -> MemberMap:
         # The primary key is addressable too — "how many distinct ids" is a
         # reasonable thing to slice by.
         members = [(entity.primary_key, entity.primary_key, DimensionKind.number)]
-        members += [
-            (d.name, d.column, d.kind) for d in entity.dimensions if not d.hidden
-        ]
+        members += [(d.name, d.column, d.kind) for d in entity.dimensions if not d.hidden]
         for label, column, kind in members:
             member = f"{cube}.{_ident(column)}"
             for key in (f"{entity.name}.{label}", label, f"{entity.name}.{column}", column):

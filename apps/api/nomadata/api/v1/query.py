@@ -61,9 +61,7 @@ async def _published(name: str) -> SemanticGraph:
         ) from None
 
 
-async def _with_timezone(
-    request: Request, name: str, query: AnalyticalQuery
-) -> AnalyticalQuery:
+async def _with_timezone(request: Request, name: str, query: AnalyticalQuery) -> AnalyticalQuery:
     """Stamp the source's timezone onto the query's time window.
 
     A relative period ("this month") is meaningless without one, and Cube

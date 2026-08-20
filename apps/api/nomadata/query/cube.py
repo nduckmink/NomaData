@@ -75,9 +75,7 @@ def _filter(f: Filter) -> dict[str, Any]:
     operator = _FILTER_OP.get(f.operator)
     if operator is None:
         # Never guess: a wrong operator produces a plausible, wrong number.
-        raise QueryEngineError(
-            f"Filter operator {f.operator!r} cannot be run by the query engine."
-        )
+        raise QueryEngineError(f"Filter operator {f.operator!r} cannot be run by the query engine.")
     if operator in _VALUELESS_CUBE_OPS:
         return {"member": f.field, "operator": operator}
     values = f.value if isinstance(f.value, list) else [f.value]
@@ -148,9 +146,7 @@ class CubeQueryEngine(QueryEngine):
         # the published model before Cube ever sees it, so an unknown metric is
         # a sentence the caller can act on rather than "Member not found".
         resolved = resolve(query, graph)
-        return ExecutionPlan(
-            source_id=graph.source_id, representation=build_cube_query(resolved)
-        )
+        return ExecutionPlan(source_id=graph.source_id, representation=build_cube_query(resolved))
 
     async def run(self, query: AnalyticalQuery, graph: SemanticGraph) -> QueryResult:
         plan = await self.plan(query, graph)

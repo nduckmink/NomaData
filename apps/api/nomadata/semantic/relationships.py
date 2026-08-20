@@ -68,9 +68,7 @@ def suggest_relationships(graph: SemanticGraph) -> list[Relationship]:
         for alias in _table_aliases(entity.table):
             by_alias.setdefault(alias, []).append(entity)
 
-    existing = {
-        (r.from_entity_key, r.from_column, r.to_entity_key) for r in graph.relationships
-    }
+    existing = {(r.from_entity_key, r.from_column, r.to_entity_key) for r in graph.relationships}
     found: list[Relationship] = []
     seen: set[tuple[str, str, str]] = set()
 

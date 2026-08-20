@@ -178,9 +178,7 @@ def _dimension_for(
 
     # Hide what is useless (or unsafe) to group by. A foreign key is always
     # worth keeping: it is how the user slices by a related entity.
-    hidden = not is_foreign_key and (
-        _is_technical(column.name) or _is_too_unique(profile, kind)
-    )
+    hidden = not is_foreign_key and (_is_technical(column.name) or _is_too_unique(profile, kind))
 
     # Samples are only meaningful (and only small) for low-cardinality columns.
     if profile is not None and profile.is_categorical is not True:

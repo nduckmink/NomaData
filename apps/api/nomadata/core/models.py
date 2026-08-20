@@ -437,6 +437,45 @@ class QueryResult(BaseModel):
     truncated: bool = False
 
 
+class AskRequest(BaseModel):
+    """A natural-language question against one source's published model."""
+
+    question: str
+
+
+class QueryPlan(BaseModel):
+    """The agent's decision for one question — the model's structured output.
+
+    ``kind`` gates the rest: only ``query`` carries a runnable ``AnalyticalQuery``
+    (business names); ``clarify`` asks the user back; ``refuse`` declines a
+    non-data question. Forcing this choice is what lets the model say "I don't
+    know" instead of inventing a query that runs and answers wrongly.
+    """
+
+    kind: str = "query"  # "query" | "clarify" | "refuse"
+    query: AnalyticalQuery | None = None
+    clarification: str = ""
+    reason: str = ""
+
+
+class AgentTurn(BaseModel):
+    """One answered (or declined) question — the /ask response and UI turn."""
+
+    kind: str  # "answer" | "clarify" | "refuse" | "error"
+    question: str
+    #: The business-name query behind the answer (for the "view query" panel).
+    query: AnalyticalQuery | None = None
+    result: QueryResult | None = None
+    #: Short deterministic headline (e.g. the single value or "N rows").
+    answer: str = ""
+    #: The "read from" trust line, built without the LLM.
+    explanation: str = ""
+    #: Business-language remarks (e.g. measured by a non-default date).
+    notes: list[str] = Field(default_factory=list)
+    clarification: str = ""
+    reason: str = ""
+
+
 # ======================================================================
 # Semantic boundary
 # ======================================================================
