@@ -17,6 +17,7 @@ import { toast } from "sonner"
 import {
   getActiveJob,
   getAIConfig,
+  type GenerationJob,
   getJob,
   getSemanticOverview,
   type SemanticModelSummary,
@@ -42,8 +43,8 @@ type Status = "idle" | "loading" | "error" | "ready"
 export default function SemanticModelsPage() {
   const [status, setStatus] = useState<Status>("loading")
   const [rows, setRows] = useState<SemanticModelSummary[]>([])
-  // Per-source in-flight generate, so only that row shows a spinner.
-  const [busy, setBusy] = useState<Record<string, boolean>>({})
+  // Per-source live build job, so only that row shows progress (done/total).
+  const [jobs, setJobs] = useState<Record<string, GenerationJob | null>>({})
   // Whether business context is worth asking for before a build.
   const [aiConfigured, setAiConfigured] = useState(false)
   const router = useRouter()
@@ -73,26 +74,23 @@ export default function SemanticModelsPage() {
     return () => controller.abort()
   }, [load])
 
-  const withBusy = async (name: string, fn: () => Promise<void>) => {
-    setBusy((b) => ({ ...b, [name]: true }))
-    try {
-      await fn()
-    } finally {
-      setBusy((b) => ({ ...b, [name]: false }))
-    }
-  }
+  const setJob = (name: string, job: GenerationJob | null) =>
+    setJobs((j) => ({ ...j, [name]: job }))
 
   // Same background job the per-source editor uses. Building a model means
   // introspection, profiling and batched AI calls — far too slow to hold a
-  // request open, and a second click must not start a duplicate build.
+  // request open, and a second click must not start a duplicate build. The live
+  // job drives the row's progress bar (done/total), like the editor's panel.
   const handleGenerate = (name: string, tables: string[]) =>
-    void withBusy(name, async () => {
+    void (async () => {
       try {
         let job = await startGenerate(name, true, { tables })
+        setJob(name, job)
         while (job.status === "running") {
           await new Promise((r) => setTimeout(r, 1500))
           const active = await getActiveJob(name)
           job = active ?? (await getJob(name, job.id))
+          setJob(name, job)
         }
         if (job.status === "error") {
           toast.error(job.error ?? "Generate failed")
@@ -102,8 +100,10 @@ export default function SemanticModelsPage() {
         await load()
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Generate failed")
+      } finally {
+        setJob(name, null)
       }
-    })
+    })()
 
   return (
     <PageContainer>
@@ -159,65 +159,80 @@ export default function SemanticModelsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => (
-                <TableRow
-                  key={row.source_id}
-                  onClick={
-                    row.has_model
-                      ? () =>
-                          router.push(
-                            `/semantic/${encodeURIComponent(row.source_id)}`
-                          )
-                      : undefined
-                  }
-                  className={
-                    row.has_model ? "cursor-pointer hover:bg-wash" : undefined
-                  }
-                >
-                  <TableCell>
-                    <span className="flex items-center gap-2.5">
-                      <span className="flex w-7 shrink-0 justify-center">
-                        {row.kind && (
-                          <DbLogo
-                            engine={row.kind}
-                            monogram={row.source_id.slice(0, 2).toUpperCase()}
-                            className="h-5 w-auto"
-                          />
-                        )}
-                      </span>
-                      <span className="font-mono font-medium">
-                        {row.source_id}
-                      </span>
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge row={row} />
-                  </TableCell>
-                  <TableCell>
-                    <HealthChip row={row} />
-                  </TableCell>
-                  <TableCell className="text-right tnum">
-                    {row.has_model ? row.entity_count : "—"}
-                  </TableCell>
-                  <TableCell className="text-right tnum">
-                    {row.has_model ? row.metric_count : "—"}
-                  </TableCell>
-                  <TableCell className="text-right tnum">
-                    {row.has_model ? row.relationship_count : "—"}
-                  </TableCell>
-                  <TableCell
-                    className="text-right"
-                    onClick={(e) => e.stopPropagation()}
+              {rows.map((row) => {
+                const job = jobs[row.source_id] ?? null
+                return (
+                  <TableRow
+                    key={row.source_id}
+                    onClick={
+                      row.has_model
+                        ? () =>
+                            router.push(
+                              `/semantic/${encodeURIComponent(row.source_id)}`
+                            )
+                        : undefined
+                    }
+                    className={
+                      row.has_model ? "cursor-pointer hover:bg-wash" : undefined
+                    }
                   >
-                    <RowActions
-                      row={row}
-                      busy={!!busy[row.source_id]}
-                      aiConfigured={aiConfigured}
-                      onGenerate={(tables) => handleGenerate(row.source_id, tables)}
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
+                    <TableCell>
+                      <span className="flex items-center gap-2.5">
+                        <span className="flex w-7 shrink-0 justify-center">
+                          {row.kind && (
+                            <DbLogo
+                              engine={row.kind}
+                              monogram={row.source_id.slice(0, 2).toUpperCase()}
+                              className="h-5 w-auto"
+                            />
+                          )}
+                        </span>
+                        <span className="font-mono font-medium">
+                          {row.source_id}
+                        </span>
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      {job ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <RiLoader4Line className="size-3.5 animate-spin" />
+                          Building…
+                        </span>
+                      ) : (
+                        <StatusBadge row={row} />
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <HealthChip row={row} />
+                    </TableCell>
+                    <TableCell className="text-right tnum">
+                      {row.has_model ? row.entity_count : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tnum">
+                      {row.has_model ? row.metric_count : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tnum">
+                      {row.has_model ? row.relationship_count : "—"}
+                    </TableCell>
+                    <TableCell
+                      className="text-right"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {job ? (
+                        <BuildProgress job={job} />
+                      ) : (
+                        <RowActions
+                          row={row}
+                          aiConfigured={aiConfigured}
+                          onGenerate={(tables) =>
+                            handleGenerate(row.source_id, tables)
+                          }
+                        />
+                      )}
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         </div>
@@ -279,12 +294,10 @@ function HealthChip({ row }: { row: SemanticModelSummary }) {
 
 function RowActions({
   row,
-  busy,
   aiConfigured,
   onGenerate,
 }: {
   row: SemanticModelSummary
-  busy: boolean
   aiConfigured: boolean
   onGenerate: (tables: string[]) => void
 }) {
@@ -308,18 +321,36 @@ function RowActions({
         source={row.source_id}
         mode="generate"
         aiConfigured={aiConfigured}
-        disabled={busy}
         onBuild={onGenerate}
       >
-        <Button variant="outline" size="sm" disabled={busy}>
-          {busy ? (
-            <RiLoader4Line data-icon="inline-start" className="animate-spin" />
-          ) : (
-            <RiAddLine data-icon="inline-start" />
-          )}
+        <Button variant="outline" size="sm">
+          <RiAddLine data-icon="inline-start" />
           Generate
         </Button>
       </BuildModelDialog>
+    </div>
+  )
+}
+
+/** The row's live build progress — mirrors the editor panel's spinner + bar. */
+function BuildProgress({ job }: { job: GenerationJob }) {
+  const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : null
+  return (
+    <div className="flex items-center justify-end gap-2.5">
+      <RiLoader4Line className="size-4 shrink-0 animate-spin text-accent-brand" />
+      <div className="flex flex-col items-end gap-1">
+        <span className="text-xs font-medium">
+          {pct !== null ? `Building… ${pct}%` : "Building…"}
+        </span>
+        {pct !== null && (
+          <div className="h-1 w-36 overflow-hidden rounded-full bg-border">
+            <div
+              className="h-full bg-accent-brand transition-[width] duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        )}
+      </div>
     </div>
   )
 }
