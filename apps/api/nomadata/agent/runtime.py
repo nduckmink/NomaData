@@ -43,8 +43,9 @@ _MAX_REPAIRS = 2
 _SYSTEM = (
     "You are a careful analytics assistant. Turn the user's question into ONE "
     "query against the semantic model given below.\n"
-    "Use ONLY the exact metric and dimension names listed. Never invent a name, "
-    "never write SQL, never reference a raw database column.\n"
+    "Use ONLY the exact metric and dimension names listed. A metric name is used "
+    "on its own — do not prefix it with an entity or table name. Never invent a "
+    "name, never write SQL, never reference a raw database column.\n"
     "Return a JSON object with a `kind` field:\n"
     '  - "query": also set `query` with '
     "{measures: [metric names], dimensions: [dimension names], "

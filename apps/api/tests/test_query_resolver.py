@@ -112,6 +112,23 @@ def test_a_metric_id_works_as_well_as_its_name() -> None:
     assert resolved.measures == ["hoc_phi.Hoc_phi_da_thu"]
 
 
+def test_a_metric_qualified_by_its_entity_still_resolves() -> None:
+    """A model lists dimensions as "Entity.name", so it tends to qualify a
+    metric the same way ("Phiếu học phí.Học phí đã thu"). That is the same
+    metric, only prefixed — resolve it, don't reject a name that exists."""
+    graph = _graph()
+    resolved = resolve(AnalyticalQuery(measures=["Phiếu học phí.Học phí đã thu"]), graph)
+
+    assert resolved.measures == ["hoc_phi.Hoc_phi_da_thu"]
+
+
+def test_a_metric_qualified_by_its_cube_id_still_resolves() -> None:
+    graph = _graph()
+    resolved = resolve(AnalyticalQuery(measures=["hoc_phi.Học phí đã thu"]), graph)
+
+    assert resolved.measures == ["hoc_phi.Hoc_phi_da_thu"]
+
+
 def test_filters_and_order_are_translated_too() -> None:
     resolved = resolve(
         AnalyticalQuery(

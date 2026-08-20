@@ -453,6 +453,12 @@ def member_map(graph: SemanticGraph) -> MemberMap:
             result.measure_labels[metric.id] = metric.name
             if metric.name.strip():
                 result.measure_ids[normalise(metric.name)] = metric.id
+                # The model lists metrics bare but dimensions as "Entity.name",
+                # so a model tends to qualify a metric the same way. Accept both
+                # the entity display name and the cube id as the qualifier — it
+                # is the same metric, only prefixed, not a fuzzy guess.
+                for key in (f"{entity.name}.{metric.name}", f"{cube}.{metric.name}"):
+                    result.measure_ids.setdefault(normalise(key), metric.id)
 
         # The primary key is addressable too — "how many distinct ids" is a
         # reasonable thing to slice by.
