@@ -856,3 +856,14 @@ export async function ask(
   if (!res.ok) throw new Error(await errorDetail(res))
   return (await res.json()) as AgentTurn
 }
+
+/** A few real questions to try, from the source's published model. */
+export async function askExamples(
+  name: string,
+  signal?: AbortSignal
+): Promise<string[]> {
+  return getJSON<string[]>(
+    `/api/v1/datasources/${encodeURIComponent(name)}/ask/examples`,
+    signal
+  )
+}

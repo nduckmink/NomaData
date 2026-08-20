@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
+from nomadata.agent.resolver import queryable_metrics
 from nomadata.agent.runtime import AgentRuntime
 from nomadata.core.errors import (
     QueryEngineNotConfiguredError,
@@ -52,6 +53,35 @@ async def _context(request: Request, name: str) -> BusinessContext | None:
     if repo is None:
         return None
     return await repo.get(name)
+
+
+def _examples(graph: SemanticGraph) -> list[str]:
+    """A few real questions to try, drawn from the published model — ground
+    truth, so the UI never suggests a metric the model can't answer."""
+    metrics = queryable_metrics(graph)
+    if not metrics:
+        return []
+    by_key = {e.key: e for e in graph.entities}
+    out: list[str] = [m.name for m in metrics[:3]]
+    first = metrics[0]
+    entity = by_key.get(first.entity_key or "")
+    if entity is not None:
+        dim = next(
+            (d for d in entity.dimensions if not d.hidden and d.column != first.column),
+            None,
+        )
+        if dim is not None:
+            out.append(f"{first.name} by {dim.name}")
+    return list(dict.fromkeys(out))[:5]
+
+
+@router.get("/examples")
+async def examples(name: str) -> list[str]:
+    """Suggested questions for a source (empty list if it has no published model)."""
+    try:
+        return _examples(await _published(name))
+    except HTTPException:
+        return []
 
 
 @router.post("", response_model=AgentTurn)

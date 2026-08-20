@@ -12,6 +12,7 @@ import {
 import {
   type AgentTurn,
   ask,
+  askExamples,
   getSemanticOverview,
   type QueryResult,
   type SemanticModelSummary,
@@ -63,6 +64,7 @@ export default function AskPage() {
   const [exchanges, setExchanges] = useState<Exchange[]>([])
   const [input, setInput] = useState("")
   const [asking, setAsking] = useState(false)
+  const [examples, setExamples] = useState<string[]>([])
 
   // Only sources with a published model can answer — the query layer reads what
   // was published, never a draft.
@@ -84,8 +86,24 @@ export default function AskPage() {
     return () => controller.abort()
   }, [])
 
-  async function submit() {
-    const question = input.trim()
+  // Example questions for the chosen source — turns a blank page (and a
+  // clarify) into clickable next steps instead of a dead end.
+  useEffect(() => {
+    if (!source) return
+    const controller = new AbortController()
+    void (async () => {
+      try {
+        const ex = await askExamples(source, controller.signal)
+        if (!controller.signal.aborted) setExamples(ex)
+      } catch {
+        if (!controller.signal.aborted) setExamples([])
+      }
+    })()
+    return () => controller.abort()
+  }, [source])
+
+  async function send(raw: string) {
+    const question = raw.trim()
     if (!question || !source || asking) return
     setInput("")
     setAsking(true)
@@ -170,13 +188,20 @@ export default function AskPage() {
         <Conversation className="min-h-0 flex-1">
           <ConversationContent className="space-y-6">
             {exchanges.length === 0 && (
-              <p className="pt-10 text-center text-sm text-muted-foreground">
-                Ask about {source} in plain language — e.g. a total this month,
-                broken down by a category.
-              </p>
+              <div className="flex flex-col items-center gap-3 pt-10 text-center">
+                <p className="text-sm text-muted-foreground">
+                  Ask about {source} in plain language. Try:
+                </p>
+                <SuggestionChips examples={examples} onSuggest={send} />
+              </div>
             )}
             {exchanges.map((x, i) => (
-              <ExchangeView key={i} exchange={x} />
+              <ExchangeView
+                key={i}
+                exchange={x}
+                examples={examples}
+                onSuggest={send}
+              />
             ))}
           </ConversationContent>
           <ConversationScrollButton />
@@ -190,7 +215,7 @@ export default function AskPage() {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault()
-                  void submit()
+                  void send(input)
                 }
               }}
               placeholder={`Ask ${source}…`}
@@ -199,7 +224,7 @@ export default function AskPage() {
               disabled={asking}
             />
             <Button
-              onClick={() => void submit()}
+              onClick={() => void send(input)}
               disabled={asking || !input.trim()}
               size="icon"
               aria-label="Send"
@@ -223,7 +248,40 @@ function _replaceLast(xs: Exchange[], next: Exchange): Exchange[] {
   return copy
 }
 
-function ExchangeView({ exchange }: { exchange: Exchange }) {
+function SuggestionChips({
+  examples,
+  onSuggest,
+}: {
+  examples: string[]
+  onSuggest: (question: string) => void
+}) {
+  if (examples.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-2">
+      {examples.map((ex) => (
+        <Button
+          key={ex}
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => onSuggest(ex)}
+        >
+          {ex}
+        </Button>
+      ))}
+    </div>
+  )
+}
+
+function ExchangeView({
+  exchange,
+  examples,
+  onSuggest,
+}: {
+  exchange: Exchange
+  examples: string[]
+  onSuggest: (question: string) => void
+}) {
   return (
     <div className="flex flex-col gap-2">
       <div className="self-end rounded-lg bg-accent-brand/10 px-3 py-2 text-sm">
@@ -246,24 +304,44 @@ function ExchangeView({ exchange }: { exchange: Exchange }) {
       )}
 
       {exchange.status === "done" && exchange.turn && (
-        <TurnView turn={exchange.turn} />
+        <TurnView
+          turn={exchange.turn}
+          examples={examples}
+          onSuggest={onSuggest}
+        />
       )}
     </div>
   )
 }
 
-function TurnView({ turn }: { turn: AgentTurn }) {
+function TurnView({
+  turn,
+  examples,
+  onSuggest,
+}: {
+  turn: AgentTurn
+  examples: string[]
+  onSuggest: (question: string) => void
+}) {
   if (turn.kind === "clarify") {
     return (
-      <Alert>
-        <RiChat3Line />
-        <AlertTitle>One thing first</AlertTitle>
-        <AlertDescription>{turn.clarification}</AlertDescription>
-      </Alert>
+      <div className="flex flex-col gap-2">
+        <Alert>
+          <RiChat3Line />
+          <AlertTitle>One thing first</AlertTitle>
+          <AlertDescription>{turn.clarification}</AlertDescription>
+        </Alert>
+        <SuggestionChips examples={examples} onSuggest={onSuggest} />
+      </div>
     )
   }
   if (turn.kind === "refuse") {
-    return <p className="text-sm text-muted-foreground">{turn.reason}</p>
+    return (
+      <div className="flex flex-col gap-2">
+        <p className="text-sm text-muted-foreground">{turn.reason}</p>
+        <SuggestionChips examples={examples} onSuggest={onSuggest} />
+      </div>
+    )
   }
   if (turn.kind === "error") {
     return (
