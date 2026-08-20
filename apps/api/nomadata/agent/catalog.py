@@ -44,6 +44,7 @@ def model_card(
     by_key = {e.key: e for e in graph.entities}
     metrics = queryable_metrics(graph)
 
+    total = len(metrics)
     trimmed = False
     if len(metrics) > max_metrics:
         wanted = _tokens(question)
@@ -71,9 +72,15 @@ def model_card(
             line += " [derived]"
         lines.append(line)
     if trimmed:
+        # Say what was left out, and what to do about it — but only things the
+        # model can actually do. The earlier wording invited it to "ask to list
+        # more" when there is no tool to ask with, so the one honest move left
+        # (clarify) went unmentioned.
         lines.append(
-            f"(only the {max_metrics} metrics most relevant to the question are "
-            "shown; ask to list more if what you need is missing)"
+            f"(showing the {max_metrics} metrics most relevant to this question, "
+            f"out of {total} published. If none of them is what the question "
+            'means, answer with kind="clarify" and name what you were looking '
+            "for — do not substitute a different metric.)"
         )
 
     # Which entities and dimensions are in play: the entities the shown metrics

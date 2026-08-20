@@ -1,0 +1,271 @@
+[
+  {
+    "question": "tổng số tiền ứng lương tháng này",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Tổng số tiền ứng lương"],
+        "time": { "dimension": "", "range": "this_month" }
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Tổng số tiền ứng lương"],
+      "range": "this_month"
+    }
+  },
+  {
+    "question": "tháng này ứng lương bao nhiêu, chia theo trạng thái",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Tổng số tiền ứng lương"],
+        "dimensions": ["Status"],
+        "time": { "dimension": "", "range": "this_month" }
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Tổng số tiền ứng lương"],
+      "dimensions": ["Status"],
+      "range": "this_month"
+    }
+  },
+  {
+    "question": "doanh thu phí dịch vụ năm nay",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Tổng doanh thu phí dịch vụ"],
+        "time": { "dimension": "", "range": "this_year" }
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Tổng doanh thu phí dịch vụ"],
+      "range": "this_year"
+    }
+  },
+  {
+    "question": "số tiền ứng lương bình quân mỗi giao dịch trong 30 ngày qua",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Số tiền ứng lương bình quân"],
+        "time": { "dimension": "", "range": "last_30_days" }
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Số tiền ứng lương bình quân"],
+      "range": "last_30_days"
+    }
+  },
+  {
+    "question": "có bao nhiêu doanh nghiệp phát sinh giao dịch trong quý này",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Số doanh nghiệp phát sinh giao dịch"],
+        "time": { "dimension": "", "range": "this_quarter" }
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Số doanh nghiệp phát sinh giao dịch"],
+      "range": "this_quarter"
+    }
+  },
+  {
+    "question": "tổng tiền ứng lương tháng trước",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Tổng số tiền ứng lương"],
+        "time": { "dimension": "", "range": "last_month" }
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Tổng số tiền ứng lương"],
+      "range": "last_month"
+    }
+  },
+  {
+    "question": "phí dịch vụ thu được, chia theo loại nhân viên",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Tổng doanh thu phí dịch vụ"],
+        "dimensions": ["Employee Type"]
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Tổng doanh thu phí dịch vụ"],
+      "dimensions": ["Employee Type"]
+    }
+  },
+  {
+    "question": "tổng số tiền đã ứng theo kỳ, chia theo ngân hàng",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Tổng số tiền đã ứng theo kỳ"],
+        "dimensions": ["Bank Name"]
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Tổng số tiền đã ứng theo kỳ"],
+      "dimensions": ["Bank Name"]
+    }
+  },
+  {
+    "question": "tổng phí dịch vụ sau thuế theo kỳ trong năm nay",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Tổng phí dịch vụ sau thuế theo kỳ"],
+        "time": { "dimension": "", "range": "this_year" }
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Tổng phí dịch vụ sau thuế theo kỳ"],
+      "range": "this_year"
+    }
+  },
+  {
+    "question": "doanh nghiệp phải thanh toán tổng bao nhiêu theo kỳ, chia theo trạng thái thông báo",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Tổng số tiền doanh nghiệp phải thanh toán theo kỳ"],
+        "dimensions": ["Status"]
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Tổng số tiền doanh nghiệp phải thanh toán theo kỳ"],
+      "dimensions": ["Status"]
+    }
+  },
+  {
+    "question": "có bao nhiêu khu vực địa lý có doanh nghiệp",
+    "plan": {
+      "kind": "query",
+      "query": { "measures": ["Số khu vực địa lý có doanh nghiệp"] }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Số khu vực địa lý có doanh nghiệp"]
+    }
+  },
+  {
+    "question": "bao nhiêu ngành nghề kinh doanh đang có doanh nghiệp",
+    "plan": {
+      "kind": "query",
+      "query": { "measures": ["Số ngành nghề kinh doanh có doanh nghiệp"] }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Số ngành nghề kinh doanh có doanh nghiệp"]
+    }
+  },
+  {
+    "question": "hạn quá hạn trung bình là bao nhiêu ngày",
+    "plan": {
+      "kind": "query",
+      "query": { "measures": ["Hạn quá hạn trung bình (ngày)"] }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Hạn quá hạn trung bình (ngày)"]
+    }
+  },
+  {
+    "question": "phí giao dịch trung bình đang là bao nhiêu",
+    "plan": {
+      "kind": "query",
+      "query": { "measures": ["Phí giao dịch trung bình (VNĐ)"] }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Phí giao dịch trung bình (VNĐ)"]
+    }
+  },
+  {
+    "question": "tỷ lệ ứng trước trung bình cho nhân viên part-time",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Tỷ lệ ứng trước trung bình cho nhân viên part-time"]
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Tỷ lệ ứng trước trung bình cho nhân viên part-time"]
+    }
+  },
+  {
+    "question": "tổng tiền ứng lương từng tháng trong 12 tháng qua",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Tổng số tiền ứng lương"],
+        "time": {
+          "dimension": "",
+          "range": "last_12_months",
+          "grain": "month"
+        }
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Tổng số tiền ứng lương"],
+      "range": "last_12_months"
+    }
+  },
+  {
+    "question": "top doanh nghiệp theo số tiền ứng lương",
+    "plan": {
+      "kind": "query",
+      "query": {
+        "measures": ["Tổng số tiền ứng lương"],
+        "dimensions": ["Enterprise Id"],
+        "order_by": ["-Tổng số tiền ứng lương"],
+        "limit": 10
+      }
+    },
+    "expect": {
+      "kind": "answer",
+      "measures": ["Tổng số tiền ứng lương"],
+      "dimensions": ["Enterprise Id"]
+    }
+  },
+  {
+    "question": "cho tôi xem doanh thu",
+    "plan": {
+      "kind": "clarify",
+      "clarification": "Bạn muốn xem doanh thu phí dịch vụ, hay tổng phí sau thuế theo kỳ?"
+    },
+    "expect": { "kind": "clarify" }
+  },
+  {
+    "question": "hôm nay trời thế nào",
+    "plan": {
+      "kind": "refuse",
+      "reason": "Tôi chỉ trả lời được câu hỏi về dữ liệu của nguồn này."
+    },
+    "expect": { "kind": "refuse" }
+  },
+  {
+    "question": "xoá hết giao dịch tháng trước đi",
+    "plan": {
+      "kind": "refuse",
+      "reason": "Tôi chỉ đọc dữ liệu, không thay đổi được dữ liệu."
+    },
+    "expect": { "kind": "refuse" }
+  }
+]

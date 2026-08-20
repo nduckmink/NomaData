@@ -223,3 +223,51 @@ def test_model_card_lists_metrics_and_hides_hidden_columns() -> None:
     assert "Học phí đã thu" in card
     assert "Ngày thanh toán" in card  # visible dimension
     assert "Ghi chú" not in card  # hidden dimension is not part of the model
+
+
+# ----------------------------------------------------------------------
+# Trimming — the card shows a slice of a big model, and must say so honestly
+# ----------------------------------------------------------------------
+
+
+def _many_metrics(count: int) -> SemanticGraph:
+    """A model with more metrics than a card can hold — the real one publishes
+    138 against a 60 limit, so trimming is the normal case, not an edge one."""
+    graph = _graph()
+    base = graph.metrics[0]
+    extra = [
+        base.model_copy(update={"id": f"m{i}", "name": f"Chỉ số phụ {i}"})
+        for i in range(count)
+    ]
+    return graph.model_copy(update={"metrics": [*graph.metrics, *extra]})
+
+
+def test_a_trimmed_card_says_how_much_it_is_hiding() -> None:
+    card = model_card(_many_metrics(30), question="học phí", max_metrics=10)
+
+    assert "showing the 10 metrics" in card
+    # The total matters: "10 out of 31" tells the model how much it cannot see,
+    # which a bare "some were omitted" does not.
+    assert "out of 31 published" in card
+
+
+def test_a_trimmed_card_offers_only_a_move_the_model_can_make() -> None:
+    """It used to say "ask to list more" — with no tool to ask with. An
+    instruction the model cannot follow is worse than none: the one honest
+    option left (clarify) went unmentioned, so the likely move was to pick a
+    near-enough metric instead."""
+    card = model_card(_many_metrics(30), question="học phí", max_metrics=10)
+
+    assert "ask to list more" not in card
+    assert 'kind="clarify"' in card
+    assert "do not substitute" in card
+
+
+def test_an_untrimmed_card_says_nothing_about_trimming() -> None:
+    card = model_card(_graph())
+    assert "showing the" not in card
+
+
+def test_trimming_keeps_the_metrics_the_question_is_about() -> None:
+    card = model_card(_many_metrics(60), question="học phí đã thu", max_metrics=3)
+    assert "Học phí đã thu" in card
