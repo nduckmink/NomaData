@@ -13,11 +13,7 @@
  */
 
 import { useEffect, useState } from "react"
-import {
-  RiLoader4Line,
-  RiSparkling2Line,
-  RiTranslate2,
-} from "@remixicon/react"
+import { RiLoader4Line, RiSparkling2Line, RiTranslate2 } from "@remixicon/react"
 import { toast } from "sonner"
 
 import {
@@ -38,6 +34,15 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
@@ -47,6 +52,52 @@ const LANGUAGES = [
   { value: "en", label: "English" },
   { value: "vi", label: "Vietnamese" },
 ]
+
+/** A short, curated IANA list — enough to click, not the full tz database. The
+ *  detected zone and any already-saved value are added on top at render time. */
+const TIMEZONES: { region: string; zones: string[] }[] = [
+  {
+    region: "Asia",
+    zones: [
+      "Asia/Ho_Chi_Minh",
+      "Asia/Bangkok",
+      "Asia/Singapore",
+      "Asia/Jakarta",
+      "Asia/Kuala_Lumpur",
+      "Asia/Manila",
+      "Asia/Hong_Kong",
+      "Asia/Shanghai",
+      "Asia/Tokyo",
+      "Asia/Seoul",
+      "Asia/Kolkata",
+      "Asia/Dubai",
+    ],
+  },
+  {
+    region: "Europe",
+    zones: [
+      "Europe/London",
+      "Europe/Paris",
+      "Europe/Berlin",
+      "Europe/Madrid",
+      "Europe/Moscow",
+    ],
+  },
+  {
+    region: "Americas",
+    zones: [
+      "America/New_York",
+      "America/Chicago",
+      "America/Denver",
+      "America/Los_Angeles",
+      "America/Sao_Paulo",
+    ],
+  },
+  { region: "Oceania", zones: ["Australia/Sydney", "Pacific/Auckland"] },
+  { region: "UTC", zones: ["UTC"] },
+]
+
+const LISTED_ZONES = new Set(TIMEZONES.flatMap((g) => g.zones))
 
 /** The browser's own zone is the best first guess: someone setting up a
  *  database usually sits in the same place as the data. */
@@ -67,11 +118,13 @@ const EMPTY: BusinessContext = {
 
 type Mode = "generate" | "rebuild" | "edit"
 
-const COPY: Record<Mode, { title: string; description: string; submit: string }> = {
+const COPY: Record<
+  Mode,
+  { title: string; description: string; submit: string }
+> = {
   generate: {
     title: "Tell us about this data, then we'll build the model",
-    description:
-      "The AI can reads your table names, but not your business.",
+    description: "The AI can reads your table names, but not your business.",
     submit: "Save & build model",
   },
   rebuild: {
@@ -148,9 +201,7 @@ export function BuildModelDialog({
         if (controller.signal.aborted) return
         setCatalog(loaded)
         setTables(
-          new Set(
-            scope?.length ? scope : defaultSelection(rankTables(loaded))
-          )
+          new Set(scope?.length ? scope : defaultSelection(rankTables(loaded)))
         )
       } catch {
         // Without the schema the picker is skipped and the build covers
@@ -182,6 +233,117 @@ export function BuildModelDialog({
       }
     })()
 
+  // Show the saved/detected zone even when it's outside the short curated list.
+  const extraZone =
+    context.timezone && !LISTED_ZONES.has(context.timezone)
+      ? context.timezone
+      : null
+
+  const formFields = (
+    <>
+      <Field
+        label="What does this business do?"
+        required={domainRequired}
+        error={
+          showError && domainMissing ? "Please add one sentence." : undefined
+        }
+      >
+        <Textarea
+          rows={2}
+          value={context.domain}
+          onChange={(e) => set({ domain: e.target.value })}
+          placeholder="A B2B salary-advance platform; our customers are enterprises whose employees draw earned wages early."
+          aria-invalid={showError && domainMissing}
+          className={cn(showError && domainMissing && "border-destructive")}
+        />
+      </Field>
+
+      <Field
+        label="Words only your team would know"
+        hint="Abbreviations, internal codes, anything a new hire would have to ask about."
+      >
+        <Textarea
+          rows={3}
+          value={context.glossary}
+          onChange={(e) => set({ glossary: e.target.value })}
+          placeholder={
+            "labor = accrued work units\ndot = batch / period\ncs = credit scoring"
+          }
+        />
+      </Field>
+
+      <Field label="Anything odd about how tables are named?" hint="Optional.">
+        <Textarea
+          rows={2}
+          value={context.conventions}
+          onChange={(e) => set({ conventions: e.target.value })}
+          placeholder="category_* are lookup tables; ignore *_logs, *_histories and schema_migrations."
+        />
+      </Field>
+
+      <Field
+        label="Language for the names it writes"
+        hint="Entity names, metric names and descriptions are written in this language. The app stays in English."
+      >
+        <Select
+          value={context.language}
+          onValueChange={(v) => set({ language: v })}
+        >
+          <SelectTrigger className="w-48" aria-label="Output language">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {LANGUAGES.map((l) => (
+              <SelectItem key={l.value} value={l.value}>
+                {l.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+
+      <Field
+        label="Time zone of this data"
+        hint={`Decides what "this month" means. Detected: ${LOCAL_TIMEZONE}.`}
+      >
+        <Select
+          value={context.timezone}
+          onValueChange={(v) => set({ timezone: v })}
+        >
+          <SelectTrigger className="w-64 font-mono" aria-label="Time zone">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {extraZone && (
+              <SelectGroup>
+                <SelectLabel>Current</SelectLabel>
+                <SelectItem value={extraZone}>{extraZone}</SelectItem>
+              </SelectGroup>
+            )}
+            {TIMEZONES.map((g) => (
+              <SelectGroup key={g.region}>
+                <SelectLabel>{g.region}</SelectLabel>
+                {g.zones.map((z) => (
+                  <SelectItem key={z} value={z}>
+                    {z}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+
+      <Field label="Anything you want it to focus on?">
+        <Input
+          value={context.instructions}
+          onChange={(e) => set({ instructions: e.target.value })}
+          placeholder="Focus on fee revenue and outstanding/overdue balances."
+        />
+      </Field>
+    </>
+  )
+
   return (
     <Dialog
       open={open}
@@ -195,21 +357,25 @@ export function BuildModelDialog({
       <DialogTrigger asChild disabled={disabled}>
         {children}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent
+        className={cn(
+          mode !== "edit" && catalog ? "sm:max-w-4xl" : "sm:max-w-xl"
+        )}
+      >
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
 
-        <div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto pr-1">
-          {!aiConfigured && mode !== "edit" && (
-            <p className="border border-amber-500/40 bg-amber-500/5 p-2 text-xs">
-              No AI provider is configured, so this build only reads the schema.
-              Anything you write here is saved for later.
-            </p>
-          )}
+        {!aiConfigured && mode !== "edit" && (
+          <p className="border border-amber-500/40 bg-amber-500/5 p-2 text-xs">
+            No AI provider is configured, so this build only reads the schema.
+            Anything you write here is saved for later.
+          </p>
+        )}
 
-          {mode !== "edit" && catalog && (
+        {mode !== "edit" && catalog ? (
+          <div className="grid gap-6 md:grid-cols-2">
             <Field
               label="Which tables should the model cover?"
               hint="Everything else in the database is ignored. Most schemas have a
@@ -221,90 +387,15 @@ export function BuildModelDialog({
                 onChange={setTables}
               />
             </Field>
-          )}
-
-          <Field
-            label="What does this business do?"
-            required={domainRequired}
-            error={showError && domainMissing ? "Please add one sentence." : undefined}
-          >
-            <Textarea
-              rows={2}
-              value={context.domain}
-              onChange={(e) => set({ domain: e.target.value })}
-              placeholder="A school management platform; our customers are private schools."
-              aria-invalid={showError && domainMissing}
-              className={cn(
-                showError && domainMissing && "border-destructive"
-              )}
-            />
-          </Field>
-
-          <Field
-            label="Words only your team would know"
-            hint="Abbreviations, internal codes, anything a new hire would have to ask about."
-          >
-            <Textarea
-              rows={3}
-              value={context.glossary}
-              onChange={(e) => set({ glossary: e.target.value })}
-              placeholder={"dot = payment round\nhs = student\ntk = account"}
-            />
-          </Field>
-
-          <Field
-            label="Anything odd about how tables are named?"
-            hint="Optional."
-          >
-            <Textarea
-              rows={2}
-              value={context.conventions}
-              onChange={(e) => set({ conventions: e.target.value })}
-              placeholder="Tables starting with commerce_ are the core business; ignore anything ending in _tmp."
-            />
-          </Field>
-
-          <Field
-            label="Language for the names it writes"
-            hint="Entity names, metric names and descriptions are written in this language. The app stays in English."
-          >
-            <select
-              value={context.language}
-              onChange={(e) => set({ language: e.target.value })}
-              aria-label="Output language"
-              className="h-9 w-48 rounded-md border border-border/50 bg-transparent px-2 text-sm outline-none hover:border-border"
-            >
-              {LANGUAGES.map((l) => (
-                <option key={l.value} value={l.value}>
-                  {l.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field
-            label="Time zone of this data"
-            hint={`Decides what "this month" means. Detected: ${LOCAL_TIMEZONE}.`}
-          >
-            <Input
-              value={context.timezone}
-              onChange={(e) => set({ timezone: e.target.value })}
-              placeholder={LOCAL_TIMEZONE}
-              aria-label="Time zone"
-              className="w-64 font-mono text-sm"
-            />
-          </Field>
-
-          <Field
-            label="Anything you want it to focus on?"
-          >
-            <Input
-              value={context.instructions}
-              onChange={(e) => set({ instructions: e.target.value })}
-              placeholder="Focus on revenue and outstanding payments."
-            />
-          </Field>
-        </div>
+            <div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto pr-1">
+              {formFields}
+            </div>
+          </div>
+        ) : (
+          <div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto pr-1">
+            {formFields}
+          </div>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>
@@ -312,7 +403,10 @@ export function BuildModelDialog({
           </Button>
           <Button onClick={submit} disabled={saving}>
             {saving ? (
-              <RiLoader4Line data-icon="inline-start" className="animate-spin" />
+              <RiLoader4Line
+                data-icon="inline-start"
+                className="animate-spin"
+              />
             ) : mode === "edit" ? (
               <RiTranslate2 data-icon="inline-start" />
             ) : (
@@ -343,7 +437,9 @@ function Field({
     <div className="flex flex-col gap-1.5">
       <span className="flex items-center gap-1.5 text-sm font-medium">
         {label}
-        {required && <span className="text-xs text-muted-foreground">required</span>}
+        {required && (
+          <span className="text-xs text-muted-foreground">required</span>
+        )}
       </span>
       {children}
       {error ? (
