@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from nomadata.agent.catalog import model_card
 from nomadata.agent.resolver import QueryValidationError, ResolvedQuery, resolve
+from nomadata.agent.tools import ToolBox, tool_specs
 from nomadata.core.interfaces.ai_provider import AIProvider
 from nomadata.core.interfaces.query_engine import QueryEngine
 from nomadata.core.models import (
@@ -39,6 +40,10 @@ from nomadata.query.cube_schema import normalise
 from nomadata.semantic.prompt import context_rules
 
 _MAX_REPAIRS = 2
+
+#: How many times the model may call tools before it has to have an answer.
+#: Enough for look-up, correct a rejected name, run — and no room to wander.
+_MAX_TOOL_TURNS = 4
 
 _SYSTEM = (
     "You are a careful analytics assistant. Turn the user's question into ONE "
@@ -65,6 +70,37 @@ _SYSTEM = (
 )
 
 
+_TOOL_SYSTEM = (
+    "You are a careful analytics assistant. Answer the user's question about "
+    "this data source by calling the tools you have been given.\n"
+    "The model card below lists the metrics and the columns of the tables they "
+    "measure. It does NOT list the columns of joined tables, and it does not "
+    "list every metric — call list_metrics when what you need is not there, "
+    "instead of settling for something close.\n"
+    "Use ONLY the exact metric and dimension names from the card or from a tool "
+    "result. Never invent a name, never write SQL, never name a raw database "
+    "column. A metric name is used on its own; a dimension may be written "
+    '"Table.Name" when the same name appears on more than one table.\n'
+    "Call run_query exactly once, when you know which metric answers the "
+    "question. If a tool rejects a name, read what it says and correct it.\n"
+    "If you cannot answer: reply in plain text with no tool call, beginning "
+    "with REFUSE: when the question is not about this data, or CLARIFY: "
+    "followed by ONE short question when it is ambiguous or asks for something "
+    "the model does not have. Never guess a metric to make a query run."
+)
+
+
+_CLASSIFY_SYSTEM = (
+    "You answered a question about a data source without running a query. Say "
+    "which of the two it was, as JSON:\n"
+    '  - {"kind": "refuse", "reason": "..."} when the question is not about this '
+    "data at all, or asks to change data rather than read it.\n"
+    '  - {"kind": "clarify", "clarification": "..."} when it is about this data '
+    "but you need one thing settled first. Keep the question to one sentence.\n"
+    "Write the reason or the question in the user's own language. Return ONLY JSON."
+)
+
+
 class AgentRuntime:
     def __init__(self, provider: AIProvider, engine: QueryEngine) -> None:
         self._provider = provider
@@ -78,6 +114,75 @@ class AgentRuntime:
         context: BusinessContext | None = None,
     ) -> AgentTurn:
         card = model_card(graph, question=question)
+        if self._provider.capabilities.tool_calling:
+            return await self._answer_with_tools(question, card, graph, context)
+        return await self._answer_from_plan(question, card, graph, context)
+
+    async def _answer_with_tools(
+        self,
+        question: str,
+        card: str,
+        graph: SemanticGraph,
+        context: BusinessContext | None,
+    ) -> AgentTurn:
+        """Let the model look things up, then run one query through the resolver.
+
+        The card lists what the metrics measure; everything else — the 62 tables
+        one join away and their 918 columns — is a tool call away instead of in
+        every prompt. The loop ends the moment a query runs: the number and the
+        "read from" line are built from the query that ran, not from the model
+        describing what it did, so it has no chance to misreport either.
+        """
+        box = ToolBox(graph, self._engine)
+        messages = [
+            Message(role=Role.system, content=_TOOL_SYSTEM + context_rules(context)),
+            Message(role=Role.user, content=f"{card}\n\nQuestion: {question}"),
+        ]
+
+        for _ in range(_MAX_TOOL_TURNS):
+            response = await self._provider.tool_call(messages, tool_specs())
+
+            if not response.tool_calls:
+                return await self._non_answer(question, response.content or "", context)
+
+            messages.append(
+                Message(
+                    role=Role.assistant,
+                    content=response.content or "",
+                    tool_calls=response.tool_calls,
+                )
+            )
+            for call in response.tool_calls:
+                output = await box.run(call.name, call.arguments)
+                messages.append(
+                    Message(role=Role.tool, content=output, tool_call_id=call.id, name=call.name)
+                )
+
+            if box.last_result is not None and box.last_query is not None:
+                return AgentTurn(
+                    kind="answer",
+                    question=question,
+                    query=box.last_query,
+                    result=box.last_result,
+                    answer=_summarize(box.last_result),
+                    explanation=explain(box.last_query, graph),
+                    notes=box.last_notes,
+                )
+
+        return AgentTurn(
+            kind="error",
+            question=question,
+            reason="I looked, but couldn't turn that into a query I could run.",
+        )
+
+    async def _answer_from_plan(
+        self,
+        question: str,
+        card: str,
+        graph: SemanticGraph,
+        context: BusinessContext | None,
+    ) -> AgentTurn:
+        """One structured decision, no tools — for a provider that cannot call them."""
         plan = await self._plan(question, card, context)
 
         # No fallback text here on purpose. ``QueryPlan`` now rejects a reply
@@ -137,6 +242,35 @@ class AgentRuntime:
             notes=resolved.notes,
         )
 
+    async def _non_answer(
+        self, question: str, text: str, context: BusinessContext | None
+    ) -> AgentTurn:
+        """Decide whether a reply that called no tool is a question or a refusal.
+
+        Reading a prefix out of the text was cheaper and wrong: the model wrote a
+        perfectly good refusal of "delete last month's transactions" without the
+        agreed marker, and it reached the user as a clarification. Asking it to
+        classify what it just wrote costs one call on a branch that is rare by
+        construction — every answerable question ends in a tool call instead.
+        """
+        plan = await self._provider.generate_structured(
+            [
+                Message(role=Role.system, content=_CLASSIFY_SYSTEM + context_rules(context)),
+                Message(
+                    role=Role.user,
+                    content=f"Question: {question}\n\nYour reply: {text}",
+                ),
+            ],
+            QueryPlan,
+        )
+        if plan.kind == "refuse":
+            return AgentTurn(kind="refuse", question=question, reason=plan.reason)
+        return AgentTurn(
+            kind="clarify",
+            question=question,
+            clarification=plan.clarification or text.strip(),
+        )
+
     async def _plan(self, question: str, card: str, context: BusinessContext | None) -> QueryPlan:
         return await self._provider.generate_structured(
             [
@@ -186,7 +320,13 @@ def _summarize(result: QueryResult) -> str:
     if not result.rows:
         return "No matching rows."
     if len(result.rows) == 1 and len(result.columns) == 1:
-        value = next(iter(result.rows[0].values()))
+        # By name, not by position. A row carries more keys than `columns`
+        # lists — Cube adds the time dimension and its granularity — so taking
+        # the first value printed a date where the money should be. The one
+        # number this whole loop exists to get right cannot be read positionally.
+        row = result.rows[0]
+        column = result.columns[0].name
+        value = row.get(column, next(iter(row.values())))
         # A sum over nothing comes back as one NULL row, not zero rows. Printing
         # "None" reads like a failure; it means the period was empty.
         return "No matching rows." if value is None else str(value)

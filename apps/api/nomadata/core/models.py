@@ -66,7 +66,10 @@ class Message(BaseModel):
 class ChatResponse(BaseModel):
     content: str
     model: str
-    usage: dict[str, int] = Field(default_factory=dict)
+    # Whatever the provider reports, verbatim. Not dict[str, int]: gateways
+    # add fractional costs and nested breakdowns, and a usage figure is
+    # never worth failing a good answer over.
+    usage: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolSpec(BaseModel):
@@ -81,7 +84,10 @@ class ToolCallResponse(BaseModel):
     # An agent turn costs several of these. Reporting usage here — as `chat`
     # already does — is what makes the price of a question measurable at all.
     model: str = ""
-    usage: dict[str, int] = Field(default_factory=dict)
+    # Whatever the provider reports, verbatim. Not dict[str, int]: gateways
+    # add fractional costs and nested breakdowns, and a usage figure is
+    # never worth failing a good answer over.
+    usage: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProviderCapabilities(BaseModel):

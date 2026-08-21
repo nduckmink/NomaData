@@ -53,6 +53,16 @@ def _rank(metric: MetricDefinition, wanted: set[str]) -> tuple[int, int]:
     return relevance, designed
 
 
+def rank_metrics(metrics: list[MetricDefinition], topic: str) -> list[MetricDefinition]:
+    """Metrics most worth showing for ``topic``, most relevant first.
+
+    Shared with the ``list_metrics`` tool so a metric the card left out is found
+    by the same reasoning that left it out, rather than a second, different one.
+    """
+    wanted = _tokens(topic)
+    return sorted(metrics, key=lambda m: _rank(m, wanted), reverse=True)
+
+
 def _is_plain_count(metric: MetricDefinition) -> bool:
     """An unfiltered row count — what the heuristic build makes for every table."""
     return (
@@ -87,8 +97,7 @@ def model_card(
     total = len(metrics)
     trimmed = False
     if len(metrics) > max_metrics:
-        wanted = _tokens(question)
-        metrics = sorted(metrics, key=lambda m: _rank(m, wanted), reverse=True)[:max_metrics]
+        metrics = rank_metrics(metrics, question)[:max_metrics]
         trimmed = True
 
     lines: list[str] = []
@@ -119,19 +128,22 @@ def model_card(
             "for — do not substitute a different metric.)"
         )
 
-    # Which entities and dimensions are in play: the entities the shown metrics
-    # measure, plus anything one join away (so the model knows what it can slice
-    # by). Only visible dimensions — hidden ones aren't part of the model.
+    # Dimensions in full for the tables the shown metrics measure; for tables
+    # one join away, the name only. On this source the metrics live on 4 tables
+    # carrying 194 dimensions between them, while "one join away" reaches 62
+    # tables and 918 — nearly five times the card, about tables most questions
+    # never touch. The model asks `list_metrics` for those when it needs them.
     owner_keys = {m.entity_key for m in metrics if m.entity_key}
-    in_play = set(owner_keys)
+    neighbours: set[str] = set()
     for rel in graph.relationships:
         if rel.from_entity_key in owner_keys:
-            in_play.add(rel.to_entity_key)
+            neighbours.add(rel.to_entity_key)
         if rel.to_entity_key in owner_keys:
-            in_play.add(rel.from_entity_key)
+            neighbours.add(rel.from_entity_key)
+    neighbours -= owner_keys
 
     dim_lines: list[str] = []
-    for key in in_play:
+    for key in sorted(owner_keys):
         entity = by_key.get(key)
         if entity is None or entity.hidden:
             continue
@@ -147,14 +159,12 @@ def model_card(
         )
         lines.extend(dim_lines)
 
-    rels = [
-        f"- {by_key[r.from_entity_key].name} → {by_key[r.to_entity_key].name}"
-        for r in graph.relationships
-        if r.from_entity_key in by_key and r.to_entity_key in by_key
-    ]
-    if rels:
+    joined = sorted(by_key[k].name for k in neighbours if k in by_key and not by_key[k].hidden)
+    if joined:
         lines.append("")
-        lines.append("RELATIONSHIPS:")
-        lines.extend(rels)
+        lines.append(
+            "JOINED TABLES (their columns are not listed here — call list_metrics "
+            "if the question needs to slice by one of them): " + ", ".join(joined)
+        )
 
     return "\n".join(lines)
