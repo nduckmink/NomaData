@@ -26,6 +26,7 @@ from nomadata.semantic.jobs import SemanticJobRunner
 from nomadata.semantic.service import SemanticModelService
 from nomadata.storage.ai_config_repo import AIConfigRepository
 from nomadata.storage.context_repo import BusinessContextRepository
+from nomadata.storage.conversation_repo import ConversationRepository
 from nomadata.storage.data_source_repo import DataSourceRepository
 from nomadata.storage.database import Database
 from nomadata.storage.semantic_repo import SemanticRepository
@@ -55,6 +56,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             registry.set_semantic_model(semantic_service)
             contexts = BusinessContextRepository(database)
             app.state.semantic_contexts = contexts
+            app.state.conversations = ConversationRepository(database)
             app.state.semantic_jobs = SemanticJobRunner(registry, semantic_service, contexts)
             manager = DataSourceManager(DataSourceRepository(database), registry)
             count = await manager.load_all()

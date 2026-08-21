@@ -64,6 +64,40 @@ CREATE TABLE IF NOT EXISTS semantic_contexts (
 -- The zone this source's timestamps are read in; decides what "this month" means.
 ALTER TABLE semantic_contexts ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 
+-- One thread of questions against one source. A conversation exists so that
+-- "and last month?" has something to refer to; keeping it also makes an answer
+-- checkable later, which a number in a chat window otherwise never is.
+CREATE TABLE IF NOT EXISTS conversations (
+    id UUID PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_conversations_source
+    ON conversations (source_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS conversation_turns (
+    id BIGSERIAL PRIMARY KEY,
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'answer',
+    question TEXT NOT NULL,
+    query JSONB,
+    result JSONB,
+    answer TEXT NOT NULL DEFAULT '',
+    explanation TEXT NOT NULL DEFAULT '',
+    notes JSONB,
+    -- Which published model answered. Once the model reaches v4, an answer from
+    -- v3 cannot be reproduced — and the UI has to say so rather than let the
+    -- number stand as if it were still current.
+    model_version INTEGER,
+    usage JSONB,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (conversation_id, ordinal)
+);
+
 CREATE TABLE IF NOT EXISTS ai_config (
     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     provider TEXT NOT NULL DEFAULT 'openai_compatible',

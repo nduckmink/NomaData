@@ -17,7 +17,10 @@ Two deliberate choices for this first cut:
 
 from __future__ import annotations
 
+import time
+
 from nomadata.agent.catalog import model_card
+from nomadata.agent.history import history_block
 from nomadata.agent.resolver import QueryValidationError, ResolvedQuery, resolve
 from nomadata.agent.tools import ToolBox, tool_specs
 from nomadata.core.interfaces.ai_provider import AIProvider
@@ -26,6 +29,7 @@ from nomadata.core.models import (
     AgentTurn,
     AnalyticalQuery,
     BusinessContext,
+    ConversationTurn,
     Entity,
     Message,
     MetricDefinition,
@@ -34,10 +38,14 @@ from nomadata.core.models import (
     QueryResult,
     Role,
     SemanticGraph,
+    TurnUsage,
 )
+from nomadata.logging import get_logger
 from nomadata.query.cube import QueryEngineError
 from nomadata.query.cube_schema import normalise
 from nomadata.semantic.prompt import context_rules
+
+log = get_logger()
 
 _MAX_REPAIRS = 2
 
@@ -118,11 +126,28 @@ class AgentRuntime:
         graph: SemanticGraph,
         *,
         context: BusinessContext | None = None,
+        history: list[ConversationTurn] | None = None,
     ) -> AgentTurn:
+        started = time.monotonic()
         card = model_card(graph, question=question)
         if self._provider.capabilities.tool_calling:
-            return await self._answer_with_tools(question, card, graph, context)
-        return await self._answer_from_plan(question, card, graph, context)
+            turn = await self._answer_with_tools(question, card, graph, context, history or [])
+        else:
+            turn = await self._answer_from_plan(question, card, graph, context)
+
+        turn.model_version = graph.version
+        turn.usage.latency_ms = int((time.monotonic() - started) * 1000)
+        log.info(
+            "agent.turn",
+            kind=turn.kind,
+            source_id=graph.source_id,
+            latency_ms=turn.usage.latency_ms,
+            llm_calls=turn.usage.llm_calls,
+            tool_calls=turn.usage.tool_calls,
+            tokens_in=turn.usage.tokens_in,
+            tokens_out=turn.usage.tokens_out,
+        )
+        return turn
 
     async def _answer_with_tools(
         self,
@@ -130,6 +155,7 @@ class AgentRuntime:
         card: str,
         graph: SemanticGraph,
         context: BusinessContext | None,
+        history: list[ConversationTurn],
     ) -> AgentTurn:
         """Let the model look things up, then run one query through the resolver.
 
@@ -140,16 +166,27 @@ class AgentRuntime:
         describing what it did, so it has no chance to misreport either.
         """
         box = ToolBox(graph, self._engine)
+        usage = TurnUsage()
+        # Earlier turns as three lines each, not as a transcript. Replaying whole
+        # turns grows with the conversation and hands back an old QueryResult the
+        # model may read as current.
+        earlier = history_block(history)
+        parts = (
+            [card, earlier, f"Question: {question}"] if earlier else [card, f"Question: {question}"]
+        )
         messages = [
             Message(role=Role.system, content=_TOOL_SYSTEM + context_rules(context)),
-            Message(role=Role.user, content=f"{card}\n\nQuestion: {question}"),
+            Message(role=Role.user, content="\n\n".join(parts)),
         ]
 
         for _ in range(_MAX_TOOL_TURNS):
             response = await self._provider.tool_call(messages, tool_specs())
+            _add_usage(usage, response.usage)
 
             if not response.tool_calls:
-                return await self._non_answer(question, response.content or "", context)
+                turn = await self._non_answer(question, response.content or "", context)
+                turn.usage = _merge(usage, turn.usage)
+                return turn
 
             messages.append(
                 Message(
@@ -159,6 +196,7 @@ class AgentRuntime:
                 )
             )
             for call in response.tool_calls:
+                usage.tool_calls += 1
                 output = await box.run(call.name, call.arguments)
                 messages.append(
                     Message(role=Role.tool, content=output, tool_call_id=call.id, name=call.name)
@@ -173,12 +211,14 @@ class AgentRuntime:
                     answer=_summarize(box.last_result),
                     explanation=explain(box.last_query, graph),
                     notes=box.last_notes,
+                    usage=usage,
                 )
 
         return AgentTurn(
             kind="error",
             question=question,
             reason="I looked, but couldn't turn that into a query I could run.",
+            usage=usage,
         )
 
     async def _answer_from_plan(
@@ -310,6 +350,35 @@ class AgentRuntime:
             ],
             QueryPlan,
         )
+
+
+def _add_usage(usage: TurnUsage, reported: dict[str, object]) -> None:
+    """Fold one provider reply's token counts in. An agent turn is several calls.
+
+    Gateways name these differently and sometimes report floats; anything that
+    is not a plain number is skipped, because a usage figure is never worth
+    failing a good answer over.
+    """
+    usage.llm_calls += 1
+    for key in ("prompt_tokens", "input_tokens"):
+        value = reported.get(key)
+        if isinstance(value, int | float):
+            usage.tokens_in += int(value)
+            break
+    for key in ("completion_tokens", "output_tokens"):
+        value = reported.get(key)
+        if isinstance(value, int | float):
+            usage.tokens_out += int(value)
+            break
+
+
+def _merge(counted: TurnUsage, extra: TurnUsage) -> TurnUsage:
+    return TurnUsage(
+        tokens_in=counted.tokens_in + extra.tokens_in,
+        tokens_out=counted.tokens_out + extra.tokens_out,
+        llm_calls=counted.llm_calls + extra.llm_calls,
+        tool_calls=counted.tool_calls + extra.tool_calls,
+    )
 
 
 def _stamp_timezone(resolved: ResolvedQuery, context: BusinessContext | None) -> ResolvedQuery:

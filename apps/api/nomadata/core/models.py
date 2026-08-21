@@ -8,7 +8,7 @@ cross-cutting act. Grouped by architectural boundary.
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
 from uuid import uuid4
@@ -447,6 +447,9 @@ class AskRequest(BaseModel):
     """A natural-language question against one source's published model."""
 
     question: str
+    #: Continue an existing thread. Omit to start one — the id comes back on the
+    #: turn, so a caller never has to create a conversation before asking.
+    conversation_id: str | None = None
 
 
 class QueryPlan(BaseModel):
@@ -503,6 +506,51 @@ class AgentTurn(BaseModel):
     notes: list[str] = Field(default_factory=list)
     clarification: str = ""
     reason: str = ""
+    #: The thread this turn belongs to, and its place in it.
+    conversation_id: str = ""
+    ordinal: int = 0
+    #: Which published model version answered — an answer from v3 cannot be
+    #: reproduced once v4 is live, and the reader has to be told that.
+    model_version: int | None = None
+    #: What the turn cost: tokens in/out, wall-clock, how many tool calls. An
+    #: agent turn costs several LLM calls; unmeasured, nobody knows the price of
+    #: a question until the bill arrives.
+    usage: TurnUsage = Field(default_factory=lambda: TurnUsage())
+
+
+class TurnUsage(BaseModel):
+    tokens_in: int = 0
+    tokens_out: int = 0
+    latency_ms: int = 0
+    llm_calls: int = 0
+    tool_calls: int = 0
+
+
+class ConversationTurn(BaseModel):
+    """A stored turn, read back for history and for the conversation view."""
+
+    ordinal: int
+    kind: str
+    question: str
+    query: AnalyticalQuery | None = None
+    result: QueryResult | None = None
+    answer: str = ""
+    explanation: str = ""
+    notes: list[str] = Field(default_factory=list)
+    model_version: int | None = None
+    usage: TurnUsage = Field(default_factory=lambda: TurnUsage())
+    error: str = ""
+    created_at: datetime | None = None
+
+
+class Conversation(BaseModel):
+    id: str
+    source_id: str
+    title: str = ""
+    turns: list[ConversationTurn] = Field(default_factory=list)
+    turn_count: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 # ======================================================================

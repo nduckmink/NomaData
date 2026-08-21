@@ -304,11 +304,53 @@ class ToolBox:
             "row_count": result.row_count,
         }
         if len(shown) < len(result.rows) or result.truncated:
+            # Telling the model not to over-claim is not enough on its own: given
+            # 50 of 200 rows it will say "the biggest is X", and X is only the
+            # biggest of the 50 it saw. So the facts it would otherwise infer —
+            # the totals and the real top rows — are computed here, over every
+            # row, and it is told to use these instead of reading the list.
             payload["note"] = (
-                f"showing {len(shown)} of {result.row_count} rows — "
-                "describe the shape, do not claim a total over rows you cannot see"
+                f"showing {len(shown)} of {result.row_count} rows. Do NOT rank or "
+                "total from this list — it is a fragment. Use `over_all_rows` for "
+                "any statement about totals or which is largest, and say in your "
+                f"answer that {len(shown)} of {result.row_count} rows are shown."
             )
+            payload["over_all_rows"] = _over_all_rows(result)
         return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+#: How many of the real top rows to compute when the result is cut.
+_TOP_N = 5
+
+
+def _over_all_rows(result: QueryResult) -> dict[str, Any]:
+    """Facts computed across every row, for a model that can only see some.
+
+    Numeric columns get a total and the highest rows by that column. This is the
+    difference between "the largest branch is X" being true and being true only
+    of the fragment that fitted in the context window.
+    """
+    facts: dict[str, Any] = {"row_count": result.row_count}
+    labels = [c.name for c in result.columns if not _numeric(result.rows, c.name)]
+    for column in (c.name for c in result.columns if _numeric(result.rows, c.name)):
+        values = [row.get(column) for row in result.rows]
+        numbers = [float(v) for v in values if isinstance(v, int | float)]
+        if not numbers:
+            continue
+        ranked = sorted(
+            (r for r in result.rows if isinstance(r.get(column), int | float)),
+            key=lambda r: float(r[column]),
+            reverse=True,
+        )[:_TOP_N]
+        facts[column] = {
+            "total": sum(numbers),
+            "top": [{k: row.get(k) for k in [*labels, column] if k in row} for row in ranked],
+        }
+    return facts
+
+
+def _numeric(rows: list[dict[str, Any]], column: str) -> bool:
+    return any(isinstance(row.get(column), int | float) for row in rows)
 
 
 def _metric_line(metric: MetricDefinition, by_key: dict[str, Entity]) -> str:

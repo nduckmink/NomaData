@@ -231,7 +231,13 @@ async def test_a_long_result_is_cut_and_says_so() -> None:
 
     assert len(payload["rows"]) == MAX_TOOL_ROWS
     assert payload["row_count"] == 120
-    assert "do not claim a total" in payload["note"]
+    assert "Do NOT rank or total from this list" in payload["note"]
+
+    # The facts it would otherwise infer from the fragment, computed over all of
+    # it: without these, "the biggest is CS49" is true only of the first 50 rows.
+    over_all = payload["over_all_rows"]["Số học sinh"]
+    assert over_all["total"] == sum(range(120))
+    assert over_all["top"][0] == {"Cơ sở": "CS119", "Số học sinh": 119}
 
 
 @pytest.mark.asyncio
