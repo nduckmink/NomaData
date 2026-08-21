@@ -6,7 +6,7 @@ from fastapi import APIRouter
 
 from nomadata.api.v1 import (
     ai,
-    ask,
+    chat,
     conversations,
     datasources,
     health,
@@ -22,5 +22,5 @@ router.include_router(semantic.router)
 router.include_router(semantic_overview.router)
 router.include_router(query.router)
 router.include_router(ai.router)
-router.include_router(ask.router)
+router.include_router(chat.router)
 router.include_router(conversations.router)

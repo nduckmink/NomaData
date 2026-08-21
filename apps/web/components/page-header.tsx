@@ -5,27 +5,31 @@ import { cn } from "@/lib/utils"
  * scroll independently (app-like); `scroll` lets the whole page scroll.
  * Filling only applies from `md` up — on a phone, stacked panes squeezed into
  * one viewport are worse than an ordinary scrolling page.
+ *
+ * `bleed` fills too, but drops the reading column and the padding: a page whose
+ * own layout is the frame — a sidebar against a conversation — should meet the
+ * window, not sit in the middle of it with its own margins.
  */
 export function PageContainer({
   variant = "scroll",
   className,
   children,
 }: {
-  variant?: "scroll" | "fill"
+  variant?: "scroll" | "fill" | "bleed"
   className?: string
   children: React.ReactNode
 }) {
+  const fills = variant === "fill" || variant === "bleed"
   return (
     <div
-      className={cn(
-        "h-full overflow-y-auto",
-        variant === "fill" && "md:overflow-hidden"
-      )}
+      className={cn("h-full overflow-y-auto", fills && "md:overflow-hidden")}
     >
       <div
         className={cn(
-          "mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 md:p-6",
-          variant === "fill" && "md:h-full md:min-h-0",
+          variant === "bleed"
+            ? "flex h-full w-full min-w-0 flex-col"
+            : "mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 md:p-6",
+          fills && "md:h-full md:min-h-0",
           className
         )}
       >

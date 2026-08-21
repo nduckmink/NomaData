@@ -443,7 +443,7 @@ class QueryResult(BaseModel):
     truncated: bool = False
 
 
-class AskRequest(BaseModel):
+class ChatRequest(BaseModel):
     """A natural-language question against one source's published model."""
 
     question: str
@@ -491,7 +491,7 @@ class QueryPlan(BaseModel):
 
 
 class AgentTurn(BaseModel):
-    """One answered (or declined) question — the /ask response and UI turn."""
+    """One answered (or declined) question — the /chat response and UI turn."""
 
     kind: str  # "answer" | "clarify" | "refuse" | "error"
     question: str

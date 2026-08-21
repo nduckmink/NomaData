@@ -228,7 +228,7 @@ def _ask(question: str, conversation_id: str | None = None) -> dict[str, Any]:
     body: dict[str, Any] = {"question": question}
     if conversation_id:
         body["conversation_id"] = conversation_id
-    response = client.post("/api/v1/datasources/scp/ask", json=body)
+    response = client.post("/api/v1/datasources/scp/chat", json=body)
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -280,7 +280,7 @@ def test_a_thread_from_another_source_is_not_continued() -> None:
     first = _ask("học phí đã thu")
 
     response = client.post(
-        "/api/v1/datasources/other/ask",
+        "/api/v1/datasources/other/chat",
         json={"question": "gì đó", "conversation_id": first["conversation_id"]},
     )
 

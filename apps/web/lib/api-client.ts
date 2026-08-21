@@ -880,14 +880,14 @@ export interface Conversation {
   updated_at: string | null
 }
 
-export async function ask(
+export async function chat(
   name: string,
   question: string,
   conversationId?: string | null,
   signal?: AbortSignal
 ): Promise<AgentTurn> {
   const res = await fetch(
-    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/ask`,
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/chat`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

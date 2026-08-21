@@ -64,7 +64,7 @@ def main() -> int:
             expect = case.get("expect", {})
             try:
                 response = client.post(
-                    f"/api/v1/datasources/{_SOURCE}/ask", json={"question": question}
+                    f"/api/v1/datasources/{_SOURCE}/chat", json={"question": question}
                 )
                 response.raise_for_status()
                 turn = response.json()

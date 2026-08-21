@@ -1,6 +1,6 @@
 """Read back the question threads for a source.
 
-Asking is served by ``/ask``; this is what makes the asking reviewable — the
+Asking is served by ``/chat``; this is what makes the asking reviewable — the
 list of threads, and one thread in full with the query and the model version
 behind every number in it.
 """
@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from nomadata.core.models import Conversation
 
-router = APIRouter(prefix="/datasources/{name}/conversations", tags=["ask"])
+router = APIRouter(prefix="/datasources/{name}/conversations", tags=["chat"])
 
 
 def _repo(request: Request) -> Any:

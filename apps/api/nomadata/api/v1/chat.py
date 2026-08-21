@@ -1,4 +1,4 @@
-"""Ask a question in natural language against a source's published model.
+"""Chat: a question in natural language against a source's published model.
 
 The synchronous first cut of the conversational engine: question in, one
 ``AgentTurn`` out (an answer, a clarification, a refusal, or a clean error).
@@ -22,8 +22,8 @@ from nomadata.core.interfaces.query_engine import QueryEngine
 from nomadata.core.interfaces.semantic_model import SemanticModel
 from nomadata.core.models import (
     AgentTurn,
-    AskRequest,
     BusinessContext,
+    ChatRequest,
     ConversationTurn,
     SemanticGraph,
 )
@@ -31,7 +31,7 @@ from nomadata.core.registry import get_registry
 from nomadata.query.cube import QueryEngineError
 from nomadata.semantic.service import SemanticModelNotFoundError
 
-router = APIRouter(prefix="/datasources/{name}/ask", tags=["ask"])
+router = APIRouter(prefix="/datasources/{name}/chat", tags=["chat"])
 
 
 def _engine() -> QueryEngine:
@@ -75,7 +75,7 @@ def _conversations(request: Request) -> Any:
     return getattr(request.app.state, "conversations", None)
 
 
-async def _thread(request: Request, name: str, body: AskRequest) -> tuple[Any, str]:
+async def _thread(request: Request, name: str, body: ChatRequest) -> tuple[Any, str]:
     """The conversation this question belongs to, started if it is the first."""
     repo = _conversations(request)
     if repo is None:
@@ -100,7 +100,7 @@ async def _history(repo: Any, conversation_id: str) -> list[ConversationTurn]:
 
 
 @router.post("", response_model=AgentTurn)
-async def ask(request: Request, name: str, body: AskRequest) -> AgentTurn:
+async def chat(request: Request, name: str, body: ChatRequest) -> AgentTurn:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Ask a question.")

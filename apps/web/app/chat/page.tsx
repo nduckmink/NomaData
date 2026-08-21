@@ -13,7 +13,7 @@ import { toast } from "sonner"
 
 import {
   type AgentTurn,
-  ask,
+  chat,
   type Conversation,
   type ConversationTurn,
   deleteConversation,
@@ -51,7 +51,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { PageContainer } from "@/components/page-header"
 import { cn } from "@/lib/utils"
-import { ConversationList } from "@/app/ask/conversation-list"
+import { ConversationList } from "@/app/chat/conversation-list"
 
 /** A single exchange on screen. `pending` is in flight; `failed` is an
  *  HTTP-level error (no AI provider, no published model); a `turn` is whatever
@@ -90,7 +90,7 @@ function toExchange(turn: ConversationTurn): Exchange {
   }
 }
 
-export default function AskPage() {
+export default function ChatPage() {
   const [sources, setSources] = useState<SemanticModelSummary[]>([])
   const [source, setSource] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -159,7 +159,7 @@ export default function AskPage() {
     setAsking(true)
     setExchanges((xs) => [...xs, { question, status: "pending" }])
     try {
-      const turn = await ask(source, question, conversationId)
+      const turn = await chat(source, question, conversationId)
       setExchanges((xs) => _replaceLast(xs, { question, status: "done", turn }))
       if (turn.conversation_id) setConversationId(turn.conversation_id)
       void loadThreads(source)
@@ -231,8 +231,8 @@ export default function AskPage() {
   }
 
   return (
-    <PageContainer variant="fill">
-      <div className="flex h-full w-full">
+    <PageContainer variant="bleed">
+      <div className="flex h-full w-full min-w-0">
         <ConversationList
           conversations={conversations}
           activeId={conversationId}
@@ -250,7 +250,7 @@ export default function AskPage() {
             with empty space either side of them. */}
         <div className="flex h-full min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
-            <span className="text-sm font-medium">Ask</span>
+            <span className="text-sm font-medium">Chat</span>
             {sources.length > 1 ? (
               <Select
                 value={source ?? ""}
