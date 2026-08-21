@@ -245,7 +245,10 @@ export default function AskPage() {
           onDelete={(id) => void removeThread(id)}
         />
 
-        <div className="mx-auto flex h-full w-full max-w-3xl flex-col">
+        {/* Full width, not a centred column: an answer here is usually a table,
+            and a 3xl column made wide results scroll sideways inside a page
+            with empty space either side of them. */}
+        <div className="flex h-full min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
             <span className="text-sm font-medium">Ask</span>
             {sources.length > 1 ? (
