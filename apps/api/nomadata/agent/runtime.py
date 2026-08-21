@@ -83,10 +83,16 @@ _TOOL_SYSTEM = (
     '"Table.Name" when the same name appears on more than one table.\n'
     "Call run_query exactly once, when you know which metric answers the "
     "question. If a tool rejects a name, read what it says and correct it.\n"
-    "If you cannot answer: reply in plain text with no tool call, beginning "
-    "with REFUSE: when the question is not about this data, or CLARIFY: "
-    "followed by ONE short question when it is ambiguous or asks for something "
-    "the model does not have. Never guess a metric to make a query run."
+    "Before you run anything, compare the user's words against the metric "
+    "names. If one metric's name contains those words and the others do not, "
+    "that is the metric — use it and do not ask. Ask only when the words stop "
+    "short of choosing: a bare 'doanh thu' or 'số tiền' where the model "
+    "publishes several. Then name the candidates and ask which is meant, "
+    "because picking the likelier one produces a number that looks right and "
+    "answers a question nobody asked, and nothing downstream can catch that.\n"
+    "When you cannot answer, reply in plain text and call no tool: say what is "
+    "ambiguous and ask ONE short question, or say why the question is not about "
+    "this data. Never guess a metric to make a query run."
 )
 
 
