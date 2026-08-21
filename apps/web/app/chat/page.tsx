@@ -2,11 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import {
-  RiChat3Line,
-  RiErrorWarningLine,
-  RiForbid2Line,
-} from "@remixicon/react"
+import { RiChat3Line, RiErrorWarningLine } from "@remixicon/react"
 import { toast } from "sonner"
 
 import {
@@ -472,25 +468,20 @@ function TurnView({
   turn: AgentTurn
   liveVersion: number | null
 }) {
-  if (turn.kind === "clarify") {
+  // A question back, a refusal, and ordinary conversation are all just the
+  // assistant talking. Boxing them up mirrored our own `kind` field onto the
+  // screen — a reader does not need a label saying "this is a question", the
+  // question says that. Only `error` stays marked, because that is the system
+  // failing rather than the assistant speaking.
+  if (
+    turn.kind === "clarify" ||
+    turn.kind === "refuse" ||
+    turn.kind === "reply"
+  ) {
+    const text = turn.clarification || turn.reason || turn.answer
     return (
       <div className="flex flex-col gap-1.5">
-        <Alert>
-          <RiChat3Line />
-          <AlertTitle>One thing first</AlertTitle>
-          <AlertDescription>{turn.clarification}</AlertDescription>
-        </Alert>
-        <CostLine usage={turn.usage} />
-      </div>
-    )
-  }
-  if (turn.kind === "refuse") {
-    return (
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-start gap-2 rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
-          <RiForbid2Line className="mt-0.5 size-4 shrink-0" />
-          <span>{turn.reason}</span>
-        </div>
+        <p className="text-sm whitespace-pre-wrap">{text}</p>
         <CostLine usage={turn.usage} />
       </div>
     )

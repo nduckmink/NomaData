@@ -493,7 +493,11 @@ class QueryPlan(BaseModel):
 class AgentTurn(BaseModel):
     """One answered (or declined) question — the /chat response and UI turn."""
 
-    kind: str  # "answer" | "clarify" | "refuse" | "error"
+    # "answer" runs a query; "clarify" and "refuse" are the model ending its
+    # turn deliberately; "reply" is ordinary conversation — a greeting, "what
+    # can you do" — which is neither, and used to be mislabelled as one;
+    # "error" is the system failing, not the assistant speaking.
+    kind: str  # "answer" | "clarify" | "refuse" | "reply" | "error"
     question: str
     #: The business-name query behind the answer (for the "view query" panel).
     query: AnalyticalQuery | None = None

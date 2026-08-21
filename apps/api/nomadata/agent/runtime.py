@@ -82,8 +82,24 @@ _SYSTEM = (
 
 
 _TOOL_SYSTEM = (
-    "You are a careful analytics assistant. Answer the user's question about "
-    "this data source by calling the tools you have been given.\n"
+    "You are a careful analytics assistant for one data source.\n"
+    "LANGUAGE: write every word you say to the user in the language of their "
+    "question. A question in Vietnamese is answered in Vietnamese, a question "
+    "in English in English. This applies to every tool argument the user will "
+    "read and to any plain reply. Metric and dimension names are identifiers — "
+    "spell them exactly as the model does, never translate them.\n"
+    "Every turn ends in exactly one of four ways, and three of them are tool "
+    "calls:\n"
+    "  - run_query — you know which metric answers the question. This is the "
+    "goal; prefer it whenever the question is answerable.\n"
+    "  - ask_back — the question is about this data but one thing has to be "
+    "settled first. Name the candidates in the question you ask.\n"
+    "  - decline — the question is not about this data, or asks to change data "
+    "rather than read it. Deleting, updating and inserting are always decline.\n"
+    "  - plain text with no tool call — ONLY for a greeting or a question about "
+    "what you can do. Never use plain text to ask something or to turn "
+    "something down: those have tools, and a turn that should have called one "
+    "reaches the user unlabelled.\n"
     "The model card below lists the metrics and the columns of the tables they "
     "measure. It does NOT list the columns of joined tables, and it does not "
     "list every metric — call list_metrics when what you need is not there, "
@@ -92,36 +108,18 @@ _TOOL_SYSTEM = (
     "result. Never invent a name, never write SQL, never name a raw database "
     "column. A metric name is used on its own; a dimension may be written "
     '"Table.Name" when the same name appears on more than one table.\n'
-    "Call run_query exactly once, when you know which metric answers the "
-    "question. If a tool rejects a name, read what it says and correct it.\n"
-    "Before you run anything, compare the user's words against the metric "
+    "If a tool rejects a name, read what it says and correct it.\n"
+    "Before running anything, compare the user's words against the metric "
     "names. If one metric's name contains those words and the others do not, "
-    "that is the metric — use it and do not ask. Ask only when the words stop "
-    "short of choosing: a bare 'doanh thu' or 'số tiền' where the model "
-    "publishes several. Then name the candidates and ask which is meant, "
-    "because picking the likelier one produces a number that looks right and "
-    "answers a question nobody asked, and nothing downstream can catch that.\n"
-    "When you cannot answer, reply in plain text and call no tool: say what is "
-    "ambiguous and ask ONE short question, or say why the question is not about "
-    "this data. Never guess a metric to make a query run.\n"
-    "Write everything you say to the user in the language they asked in. A "
-    "question in Vietnamese is answered in Vietnamese. Metric and dimension "
-    "names stay exactly as the model spells them — those are identifiers, not "
-    "words to translate."
+    "that is the metric — use it and do not ask. Call ask_back only when the "
+    "words stop short of choosing: a bare 'doanh thu' or 'số tiền' where the "
+    "model publishes several. Picking the likelier one produces a number that "
+    "looks right and answers a question nobody asked, and nothing downstream "
+    "can catch that."
 )
 
 
-_CLASSIFY_SYSTEM = (
-    "You answered a question about a data source without running a query. Say "
-    "which of the two it was, as JSON:\n"
-    '  - {"kind": "refuse", "reason": "..."} when the question is not about this '
-    "data at all, or asks to change data rather than read it.\n"
-    '  - {"kind": "clarify", "clarification": "..."} when it is about this data '
-    "but you need one thing settled first. Keep the question to one sentence.\n"
-    "Write the reason or the question in the language the user asked in — a "
-    "question in Vietnamese gets a Vietnamese answer. Keep it to one or two "
-    "sentences. Return ONLY JSON."
-)
+_ENDING_LABEL = {"clarify": "Asking back", "refuse": "Declining", "reply": "Replying"}
 
 
 class AgentRuntime:
@@ -200,9 +198,17 @@ class AgentRuntime:
             _add_usage(usage, response.usage)
 
             if not response.tool_calls:
-                turn = await self._non_answer(question, response.content or "", context)
-                turn.usage = _merge(usage, turn.usage)
-                return turn
+                # It answered in prose despite being told not to. Keep the words
+                # rather than discard them, but this is the channel where this
+                # model falls apart — four languages in one paragraph — so it is
+                # the fallback, not a supported ending.
+                await steps.add("result", "Replying")
+                return AgentTurn(
+                    kind="reply",
+                    question=question,
+                    answer=(response.content or "").strip(),
+                    usage=usage,
+                )
 
             messages.append(
                 Message(
@@ -222,6 +228,20 @@ class AgentRuntime:
                     # Worth showing: a rejected name is the agent correcting
                     # itself, and it explains why the turn took another round.
                     await steps.add("repair", "Correcting a rejected name", output[:200])
+
+            if box.ended is not None:
+                # The model said which it was by choosing the tool, so there is
+                # nothing left to classify — and no second LLM call to pay for.
+                kind, text = box.ended
+                await steps.add("result", _ENDING_LABEL.get(kind, "Replying"))
+                return AgentTurn(
+                    kind=kind,
+                    question=question,
+                    clarification=text if kind == "clarify" else "",
+                    reason=text if kind == "refuse" else "",
+                    answer=text if kind == "reply" else "",
+                    usage=usage,
+                )
 
             if box.last_result is not None and box.last_query is not None:
                 await steps.add(
@@ -312,35 +332,6 @@ class AgentRuntime:
             answer=_summarize(result),
             explanation=explain(business, graph),
             notes=resolved.notes,
-        )
-
-    async def _non_answer(
-        self, question: str, text: str, context: BusinessContext | None
-    ) -> AgentTurn:
-        """Decide whether a reply that called no tool is a question or a refusal.
-
-        Reading a prefix out of the text was cheaper and wrong: the model wrote a
-        perfectly good refusal of "delete last month's transactions" without the
-        agreed marker, and it reached the user as a clarification. Asking it to
-        classify what it just wrote costs one call on a branch that is rare by
-        construction — every answerable question ends in a tool call instead.
-        """
-        plan = await self._provider.generate_structured(
-            [
-                Message(role=Role.system, content=_CLASSIFY_SYSTEM + context_rules(context)),
-                Message(
-                    role=Role.user,
-                    content=f"Question: {question}\n\nYour reply: {text}",
-                ),
-            ],
-            QueryPlan,
-        )
-        if plan.kind == "refuse":
-            return AgentTurn(kind="refuse", question=question, reason=plan.reason)
-        return AgentTurn(
-            kind="clarify",
-            question=question,
-            clarification=plan.clarification or text.strip(),
         )
 
     async def _plan(self, question: str, card: str, context: BusinessContext | None) -> QueryPlan:

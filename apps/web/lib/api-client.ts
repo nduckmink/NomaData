@@ -844,7 +844,10 @@ export interface AgentStep {
 
 /** One answered (or declined) question. `kind` decides which fields matter. */
 export interface AgentTurn {
-  kind: "answer" | "clarify" | "refuse" | "error"
+  /** "answer" ran a query; "clarify" and "refuse" are the model ending its turn
+   *  deliberately; "reply" is ordinary conversation; "error" is the system
+   *  failing, which is the only one the reader needs marked as different. */
+  kind: "answer" | "clarify" | "refuse" | "reply" | "error"
   question: string
   query?: AnalyticalQuery | null
   result?: QueryResult | null

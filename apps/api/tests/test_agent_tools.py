@@ -154,11 +154,18 @@ def _call(name: str, **arguments: Any) -> ToolCallResponse:
 # ----------------------------------------------------------------------
 
 
-def test_the_toolset_is_three_and_excludes_raw_schema() -> None:
+def test_the_toolset_excludes_raw_schema() -> None:
     """Raw columns stay out of the answering flow: an agent that can see them
     starts inventing metrics, which is what the semantic layer exists to stop."""
     names = {t.name for t in tool_specs()}
-    assert names == {"list_metrics", "describe_metric", "run_query"}
+    assert names == {
+        "list_metrics",
+        "describe_metric",
+        "run_query",
+        "reply",
+        "ask_back",
+        "decline",
+    }
 
 
 @pytest.mark.asyncio
@@ -290,31 +297,52 @@ async def test_a_rejected_name_comes_back_for_the_model_to_correct() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plain_text_with_no_tool_call_is_a_clarification() -> None:
-    provider = ScriptedProvider(
-        [ToolCallResponse(content="Model có hai metric doanh thu.")],
-        [QueryPlan(kind="clarify", clarification="Doanh thu nào?")],
-    )
+async def test_asking_back_is_the_model_own_words() -> None:
+    """No second call to label what it just wrote: it labelled the turn by
+    choosing the tool, and the question it typed is the question shown."""
+    provider = ScriptedProvider([_call("ask_back", question="Doanh thu nào?")])
 
     turn = await AgentRuntime(provider, FakeEngine()).answer("cho tôi xem doanh thu", _graph())
 
     assert turn.kind == "clarify"
     assert turn.clarification == "Doanh thu nào?"
+    assert turn.usage.llm_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_a_refusal_is_kept_a_refusal() -> None:
-    """A refusal written without any agreed marker is still a refusal. Reading a
-    prefix let "delete last month's transactions" reach the user as a question."""
-    provider = ScriptedProvider(
-        [ToolCallResponse(content="Tôi chỉ đọc dữ liệu, không xoá được.")],
-        [QueryPlan(kind="refuse", reason="Not about this data.")],
-    )
+async def test_declining_is_the_model_own_words() -> None:
+    provider = ScriptedProvider([_call("decline", reason="Tôi chỉ đọc dữ liệu.")])
 
-    turn = await AgentRuntime(provider, FakeEngine()).answer("hôm nay trời thế nào", _graph())
+    turn = await AgentRuntime(provider, FakeEngine()).answer("xoá hết giao dịch", _graph())
 
     assert turn.kind == "refuse"
-    assert turn.reason == "Not about this data."
+    assert turn.reason == "Tôi chỉ đọc dữ liệu."
+
+
+@pytest.mark.asyncio
+async def test_a_greeting_is_a_reply_not_a_clarification() -> None:
+    """A greeting is neither a clarification nor a refusal. Forcing those two
+    labels onto one is how "xin chào" reached the user framed as a question it
+    had to resolve before anything could happen."""
+    provider = ScriptedProvider([_call("reply", text="Xin chào! Tôi trả lời về dữ liệu này.")])
+
+    turn = await AgentRuntime(provider, FakeEngine()).answer("xin chào", _graph())
+
+    assert turn.kind == "reply"
+    assert turn.answer == "Xin chào! Tôi trả lời về dữ liệu này."
+
+
+@pytest.mark.asyncio
+async def test_prose_with_no_tool_call_is_still_kept() -> None:
+    """The fallback, not a supported ending: this model writes four languages
+    into one paragraph when it answers in prose. Its words are kept anyway —
+    dropping them would leave the user with an empty turn."""
+    provider = ScriptedProvider([ToolCallResponse(content="Xin chào!")])
+
+    turn = await AgentRuntime(provider, FakeEngine()).answer("xin chào", _graph())
+
+    assert turn.kind == "reply"
+    assert turn.answer == "Xin chào!"
 
 
 @pytest.mark.asyncio

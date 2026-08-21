@@ -6,9 +6,14 @@ dimensions between them. Sending all of that on every question is slow, dear,
 and mostly about tables the question never touches — so the card names what
 exists nearby and the model asks for the rest.
 
-Three tools, not the four in the roadmap. Every extra tool is another branch the
-model can wander down, and these three cover the whole loop: find the metric,
-understand it, run it.
+Three tools do the work — find the metric, understand it, run it — and three
+more end the turn: ``reply``, ``ask_back``, ``decline``. Ending through a tool
+rather than through plain text is not ceremony. The model in use is reliable
+inside a tool argument and degenerates in free-form prose: asked to greet in
+Vietnamese it produced four languages in one paragraph and repeated a word
+until it ran out. The same model, writing the same sentence into a tool
+argument, writes it cleanly. So every turn ends in a tool, and the label comes
+from which one it chose instead of from a second call asking what it meant.
 
 ``inspect_schema`` — raw database columns — is deliberately absent *here*. An
 agent that can see raw columns starts inventing metrics from them, which is
@@ -82,6 +87,66 @@ def tool_specs() -> list[ToolSpec]:
                 "type": "object",
                 "properties": {"name": {"type": "string", "description": "The exact metric name."}},
                 "required": ["name"],
+            },
+        ),
+        ToolSpec(
+            name="reply",
+            description=(
+                "Say something to the user that is not an answer from data and "
+                "not a question back: a greeting, or what you can help with. "
+                "End your turn with it."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": (
+                            "Two or three sentences at most, in the language the user wrote in."
+                        ),
+                    }
+                },
+                "required": ["text"],
+            },
+        ),
+        ToolSpec(
+            name="ask_back",
+            description=(
+                "Ask the user one short question and end your turn. Use this "
+                "when the question is about this data but one thing has to be "
+                "settled first — which of two revenue metrics, which period. "
+                "Do not use it to answer; do not use it to decline."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": (
+                            "The question, in the language the user asked in. "
+                            "Name the candidates you are choosing between."
+                        ),
+                    }
+                },
+                "required": ["question"],
+            },
+        ),
+        ToolSpec(
+            name="decline",
+            description=(
+                "Say why you will not answer, and end your turn. Use this when "
+                "the question is not about this data at all, or asks to change "
+                "data rather than read it."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "One or two sentences, in the user's language.",
+                    }
+                },
+                "required": ["reason"],
             },
         ),
         ToolSpec(
@@ -187,6 +252,9 @@ class ToolBox:
         self.last_query: AnalyticalQuery | None = None
         self.last_result: QueryResult | None = None
         self.last_notes: list[str] = []
+        #: Set when the model ends the turn without an answer. Its own words,
+        #: with its own label — no second call to ask what it meant.
+        self.ended: tuple[str, str] | None = None
 
     async def run(self, name: str, arguments: dict[str, Any]) -> str:
         """Execute a tool call and return what the model should read back.
@@ -196,6 +264,24 @@ class ToolBox:
         model correct course — which is the entire point of giving it tools.
         """
         try:
+            if name == "reply":
+                text = str(arguments.get("text") or "").strip()
+                if not text:
+                    return "reply needs a `text`. Write what you want to say."
+                self.ended = ("reply", text)
+                return "Said. Your turn is over."
+            if name == "ask_back":
+                text = str(arguments.get("question") or "").strip()
+                if not text:
+                    return "ask_back needs a `question`. Write the question you want to ask."
+                self.ended = ("clarify", text)
+                return "Asked. Your turn is over."
+            if name == "decline":
+                text = str(arguments.get("reason") or "").strip()
+                if not text:
+                    return "decline needs a `reason`. Say why you will not answer."
+                self.ended = ("refuse", text)
+                return "Declined. Your turn is over."
             if name == "list_metrics":
                 return self._list_metrics(str(arguments.get("topic") or ""))
             if name == "describe_metric":
