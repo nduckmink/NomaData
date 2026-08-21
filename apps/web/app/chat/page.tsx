@@ -10,8 +10,9 @@ import {
 import { toast } from "sonner"
 
 import {
+  type AgentStep,
   type AgentTurn,
-  chat,
+  chatStream,
   type Conversation,
   type ConversationTurn,
   deleteConversation,
@@ -27,11 +28,16 @@ import {
   ConversationContent,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation"
+import {
+  ChainOfThought,
+  ChainOfThoughtContent,
+  ChainOfThoughtHeader,
+  ChainOfThoughtStep,
+} from "@/components/ai-elements/chain-of-thought"
 import { Loader } from "@/components/ai-elements/loader"
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import {
   PromptInput,
-  PromptInputBody,
   type PromptInputMessage,
   PromptInputFooter,
   PromptInputSubmit,
@@ -69,6 +75,9 @@ type Exchange = {
   status: "pending" | "done" | "failed"
   turn?: AgentTurn
   error?: string
+  /** Steps received so far. While pending this is the only thing to show; once
+   *  the turn lands its own copy is used, which is what a reopened thread has. */
+  steps: AgentStep[]
 }
 
 const MAX_TABLE_ROWS = 50
@@ -78,6 +87,7 @@ function toExchange(turn: ConversationTurn): Exchange {
   return {
     question: turn.question,
     status: "done",
+    steps: turn.steps,
     turn: {
       kind: turn.kind,
       question: turn.question,
@@ -94,6 +104,7 @@ function toExchange(turn: ConversationTurn): Exchange {
       ordinal: turn.ordinal,
       model_version: turn.model_version,
       usage: turn.usage,
+      steps: turn.steps,
     },
   }
 }
@@ -163,10 +174,27 @@ export default function ChatPage() {
     const question = raw.trim()
     if (!question || !source || asking) return
     setAsking(true)
-    setExchanges((xs) => [...xs, { question, status: "pending" }])
+    setExchanges((xs) => [...xs, { question, status: "pending", steps: [] }])
+    const seen: AgentStep[] = []
     try {
-      const turn = await chat(source, question, conversationId)
-      setExchanges((xs) => _replaceLast(xs, { question, status: "done", turn }))
+      const turn = await chatStream(
+        source,
+        question,
+        conversationId,
+        (step) => {
+          seen.push(step)
+          setExchanges((xs) =>
+            _replaceLast(xs, {
+              question,
+              status: "pending",
+              steps: [...seen],
+            })
+          )
+        }
+      )
+      setExchanges((xs) =>
+        _replaceLast(xs, { question, status: "done", turn, steps: turn.steps })
+      )
       if (turn.conversation_id) setConversationId(turn.conversation_id)
       void loadThreads(source)
     } catch (e) {
@@ -174,6 +202,7 @@ export default function ChatPage() {
         _replaceLast(xs, {
           question,
           status: "failed",
+          steps: seen,
           error: e instanceof Error ? e.message : "Something went wrong.",
         })
       )
@@ -312,27 +341,30 @@ export default function ChatPage() {
                 void send(message.text)
               }
             >
-              <PromptInputBody>
-                <PromptInputTextarea
-                  placeholder={
-                    exchanges.length > 0
-                      ? "Ask a follow-up…"
-                      : `Ask ${source} in plain language…`
-                  }
+              {/* Direct children of the group on purpose: it grows to fit a
+                  textarea through `has-[>textarea]`, and stacks its footer
+                  through `has-[>[data-align=block-end]]`. Wrapping these in
+                  anything — even a `display:contents` element — leaves the
+                  group one line tall with the textarea clipped out of it. */}
+              <PromptInputTextarea
+                placeholder={
+                  exchanges.length > 0
+                    ? "Ask a follow-up…"
+                    : `Ask ${source} in plain language…`
+                }
+                disabled={asking}
+              />
+              <PromptInputFooter>
+                <PromptInputTools>
+                  <span className="px-1 text-xs text-muted-foreground">
+                    Enter to send · Shift+Enter for a new line
+                  </span>
+                </PromptInputTools>
+                <PromptInputSubmit
                   disabled={asking}
+                  status={asking ? "submitted" : undefined}
                 />
-                <PromptInputFooter>
-                  <PromptInputTools>
-                    <span className="px-1 text-xs text-muted-foreground">
-                      Enter to send · Shift+Enter for a new line
-                    </span>
-                  </PromptInputTools>
-                  <PromptInputSubmit
-                    disabled={asking}
-                    status={asking ? "submitted" : undefined}
-                  />
-                </PromptInputFooter>
-              </PromptInputBody>
+              </PromptInputFooter>
             </PromptInput>
           </div>
         </div>
@@ -362,10 +394,15 @@ function ExchangeView({
 
       <Message from="assistant">
         <MessageContent className="w-full">
-          {exchange.status === "pending" && (
+          <StepTrail
+            steps={exchange.steps}
+            running={exchange.status === "pending"}
+          />
+
+          {exchange.status === "pending" && exchange.steps.length === 0 && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader size={16} />
-              Reading the model, planning the query…
+              Thinking…
             </div>
           )}
 
@@ -383,6 +420,48 @@ function ExchangeView({
         </MessageContent>
       </Message>
     </div>
+  )
+}
+
+/** What the agent did, live while it runs and folded away once it is done.
+ *
+ *  Open while running because the wait is the reason it exists; closed
+ *  afterwards because by then the answer is the point, and the trail is there
+ *  for the reader who wants to know how the number was reached. */
+function StepTrail({
+  steps,
+  running,
+}: {
+  steps: AgentStep[]
+  running: boolean
+}) {
+  const [opened, setOpened] = useState(false)
+  if (steps.length === 0) return null
+  const label = running
+    ? steps[steps.length - 1].label
+    : `Worked through ${steps.length} ${steps.length === 1 ? "step" : "steps"}`
+
+  return (
+    // Controlled the whole way: switching between controlled and uncontrolled
+    // mid-life is a React warning, and forcing it open while running is the
+    // point — the wait is what the trail is for.
+    <ChainOfThought
+      open={running || opened}
+      onOpenChange={setOpened}
+      className="max-w-full"
+    >
+      <ChainOfThoughtHeader>{label}</ChainOfThoughtHeader>
+      <ChainOfThoughtContent>
+        {steps.map((step, i) => (
+          <ChainOfThoughtStep
+            key={i}
+            label={step.label}
+            description={step.detail || undefined}
+            status={running && i === steps.length - 1 ? "active" : "complete"}
+          />
+        ))}
+      </ChainOfThoughtContent>
+    </ChainOfThought>
   )
 }
 

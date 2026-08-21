@@ -18,6 +18,8 @@ Two deliberate choices for this first cut:
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from nomadata.agent.catalog import model_card
 from nomadata.agent.history import history_block
@@ -26,6 +28,7 @@ from nomadata.agent.tools import ToolBox, tool_specs
 from nomadata.core.interfaces.ai_provider import AIProvider
 from nomadata.core.interfaces.query_engine import QueryEngine
 from nomadata.core.models import (
+    AgentStep,
     AgentTurn,
     AnalyticalQuery,
     BusinessContext,
@@ -100,7 +103,11 @@ _TOOL_SYSTEM = (
     "answers a question nobody asked, and nothing downstream can catch that.\n"
     "When you cannot answer, reply in plain text and call no tool: say what is "
     "ambiguous and ask ONE short question, or say why the question is not about "
-    "this data. Never guess a metric to make a query run."
+    "this data. Never guess a metric to make a query run.\n"
+    "Write everything you say to the user in the language they asked in. A "
+    "question in Vietnamese is answered in Vietnamese. Metric and dimension "
+    "names stay exactly as the model spells them — those are identifiers, not "
+    "words to translate."
 )
 
 
@@ -111,7 +118,9 @@ _CLASSIFY_SYSTEM = (
     "data at all, or asks to change data rather than read it.\n"
     '  - {"kind": "clarify", "clarification": "..."} when it is about this data '
     "but you need one thing settled first. Keep the question to one sentence.\n"
-    "Write the reason or the question in the user's own language. Return ONLY JSON."
+    "Write the reason or the question in the language the user asked in — a "
+    "question in Vietnamese gets a Vietnamese answer. Keep it to one or two "
+    "sentences. Return ONLY JSON."
 )
 
 
@@ -127,13 +136,19 @@ class AgentRuntime:
         *,
         context: BusinessContext | None = None,
         history: list[ConversationTurn] | None = None,
+        on_step: StepSink | None = None,
     ) -> AgentTurn:
         started = time.monotonic()
+        steps = _Steps(on_step)
+        await steps.add("plan", "Reading the semantic model")
         card = model_card(graph, question=question)
         if self._provider.capabilities.tool_calling:
-            turn = await self._answer_with_tools(question, card, graph, context, history or [])
+            turn = await self._answer_with_tools(
+                question, card, graph, context, history or [], steps
+            )
         else:
             turn = await self._answer_from_plan(question, card, graph, context)
+        turn.steps = steps.taken
 
         turn.model_version = graph.version
         turn.usage.latency_ms = int((time.monotonic() - started) * 1000)
@@ -156,6 +171,7 @@ class AgentRuntime:
         graph: SemanticGraph,
         context: BusinessContext | None,
         history: list[ConversationTurn],
+        steps: _Steps,
     ) -> AgentTurn:
         """Let the model look things up, then run one query through the resolver.
 
@@ -197,12 +213,22 @@ class AgentRuntime:
             )
             for call in response.tool_calls:
                 usage.tool_calls += 1
+                await steps.add("tool", _tool_label(call.name, call.arguments))
                 output = await box.run(call.name, call.arguments)
                 messages.append(
                     Message(role=Role.tool, content=output, tool_call_id=call.id, name=call.name)
                 )
+                if output.startswith("That did not work"):
+                    # Worth showing: a rejected name is the agent correcting
+                    # itself, and it explains why the turn took another round.
+                    await steps.add("repair", "Correcting a rejected name", output[:200])
 
             if box.last_result is not None and box.last_query is not None:
+                await steps.add(
+                    "result",
+                    f"{box.last_result.row_count} "
+                    f"{'row' if box.last_result.row_count == 1 else 'rows'}",
+                )
                 return AgentTurn(
                     kind="answer",
                     question=question,
@@ -350,6 +376,44 @@ class AgentRuntime:
             ],
             QueryPlan,
         )
+
+
+#: Called as each step happens, so a caller can stream it while the turn runs.
+StepSink = Callable[[AgentStep], Awaitable[None]]
+
+
+class _Steps:
+    """Collects the turn's steps and forwards each one as it happens.
+
+    Both at once on purpose: the stream shows the work while it is happening,
+    and the same list is stored with the turn, so reopening a thread shows how
+    an answer was reached rather than only what it was.
+    """
+
+    def __init__(self, sink: StepSink | None) -> None:
+        self.taken: list[AgentStep] = []
+        self._sink = sink
+
+    async def add(self, kind: str, label: str, detail: str = "") -> None:
+        step = AgentStep(kind=kind, label=label, detail=detail)
+        self.taken.append(step)
+        if self._sink is not None:
+            await self._sink(step)
+
+
+def _tool_label(name: str, arguments: dict[str, Any]) -> str:
+    """What a tool call is doing, in the words a person would use."""
+    if name == "list_metrics":
+        topic = str(arguments.get("topic") or "").strip()
+        return f"Looking for metrics about “{topic}”" if topic else "Listing metrics"
+    if name == "describe_metric":
+        return f"Checking how “{arguments.get('name', '')}” is calculated"
+    if name == "run_query":
+        measures = arguments.get("measures") or []
+        if isinstance(measures, list) and measures:
+            return f"Running {', '.join(str(m) for m in measures)}"
+        return "Running the query"
+    return f"Calling {name}"
 
 
 def _add_usage(usage: TurnUsage, reported: dict[str, object]) -> None:

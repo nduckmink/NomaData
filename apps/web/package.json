@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@radix-ui/react-use-controllable-state": "^1.2.6",
     "@remixicon/react": "^4.9.0",
     "ai": "^7.0.74",
     "class-variance-authority": "^0.7.1",

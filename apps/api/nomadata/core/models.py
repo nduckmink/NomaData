@@ -516,6 +516,21 @@ class AgentTurn(BaseModel):
     #: agent turn costs several LLM calls; unmeasured, nobody knows the price of
     #: a question until the bill arrives.
     usage: TurnUsage = Field(default_factory=lambda: TurnUsage())
+    #: What the agent did on the way to this answer, in order.
+    steps: list[AgentStep] = Field(default_factory=list)
+
+
+class AgentStep(BaseModel):
+    """One thing the agent did, in the order it did it.
+
+    The visible half of a turn that otherwise takes ten seconds behind a
+    spinner. It is also the honest account of how an answer was reached: which
+    metric was looked up, which query ran, what a tool rejected.
+    """
+
+    kind: str  # "plan" | "tool" | "result" | "repair"
+    label: str
+    detail: str = ""
 
 
 class TurnUsage(BaseModel):
@@ -539,6 +554,7 @@ class ConversationTurn(BaseModel):
     notes: list[str] = Field(default_factory=list)
     model_version: int | None = None
     usage: TurnUsage = Field(default_factory=lambda: TurnUsage())
+    steps: list[AgentStep] = Field(default_factory=list)
     error: str = ""
     created_at: datetime | None = None
 

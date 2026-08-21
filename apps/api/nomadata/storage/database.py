@@ -97,6 +97,9 @@ CREATE TABLE IF NOT EXISTS conversation_turns (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (conversation_id, ordinal)
 );
+-- What the agent did on the way to the answer. Kept with the turn so reopening
+-- a thread shows how a number was reached, not only what it was.
+ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS steps JSONB;
 
 CREATE TABLE IF NOT EXISTS ai_config (
     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),

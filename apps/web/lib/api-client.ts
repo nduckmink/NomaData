@@ -835,6 +835,13 @@ export interface TurnUsage {
   tool_calls: number
 }
 
+/** One thing the agent did on the way to an answer. */
+export interface AgentStep {
+  kind: "plan" | "tool" | "result" | "repair"
+  label: string
+  detail: string
+}
+
 /** One answered (or declined) question. `kind` decides which fields matter. */
 export interface AgentTurn {
   kind: "answer" | "clarify" | "refuse" | "error"
@@ -852,6 +859,7 @@ export interface AgentTurn {
    *  cannot be reproduced, and the reader has to be told rather than assume. */
   model_version: number | null
   usage: TurnUsage
+  steps: AgentStep[]
 }
 
 /** A stored turn, read back when a thread is reopened. */
@@ -866,6 +874,7 @@ export interface ConversationTurn {
   notes: string[]
   model_version: number | null
   usage: TurnUsage
+  steps: AgentStep[]
   error: string
   created_at: string | null
 }
@@ -903,6 +912,67 @@ export async function chat(
   )
   if (!res.ok) throw new Error(await errorDetail(res))
   return (await res.json()) as AgentTurn
+}
+
+/** Ask, and watch the work while it happens.
+ *
+ *  What arrives before the answer is the agent's progress, not the answer being
+ *  written a word at a time: the number and the "read from" line are computed
+ *  once the query has run. The ten seconds of silence is what this removes.
+ *
+ *  Server-sent events over POST, so `EventSource` (GET only) is out and the
+ *  body is read and split by hand. */
+export async function chatStream(
+  name: string,
+  question: string,
+  conversationId: string | null | undefined,
+  onStep: (step: AgentStep) => void,
+  signal?: AbortSignal
+): Promise<AgentTurn> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/chat/stream`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        conversationId
+          ? { question, conversation_id: conversationId }
+          : { question }
+      ),
+      signal,
+    }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
+  if (!res.body) throw new Error("The server sent no response body.")
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let turn: AgentTurn | null = null
+  let failure = ""
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    // Events are separated by a blank line; anything after the last one is a
+    // partial event still arriving, so it stays in the buffer.
+    const chunks = buffer.split("\n\n")
+    buffer = chunks.pop() ?? ""
+    for (const chunk of chunks) {
+      const event = /^event: (.*)$/m.exec(chunk)?.[1]
+      const data = /^data: (.*)$/m.exec(chunk)?.[1]
+      if (!event || !data) continue
+      if (event === "step") onStep(JSON.parse(data) as AgentStep)
+      else if (event === "turn") turn = JSON.parse(data) as AgentTurn
+      else if (event === "error")
+        failure = (JSON.parse(data) as { detail: string }).detail
+    }
+  }
+
+  if (failure) throw new Error(failure)
+  if (!turn) throw new Error("The answer never arrived.")
+  return turn
 }
 
 export function listConversations(

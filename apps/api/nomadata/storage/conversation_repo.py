@@ -16,6 +16,7 @@ import uuid
 from typing import Any
 
 from nomadata.core.models import (
+    AgentStep,
     AgentTurn,
     AnalyticalQuery,
     Conversation,
@@ -27,7 +28,7 @@ from nomadata.storage.database import Database
 
 _TURN_COLUMNS = (
     "ordinal, kind, question, query, result, answer, explanation, notes, "
-    "model_version, usage, error, created_at"
+    "model_version, usage, steps, error, created_at"
 )
 
 
@@ -57,6 +58,7 @@ def _to_turn(row: Any) -> ConversationTurn:
         notes=_loads(row["notes"]) or [],
         model_version=row["model_version"],
         usage=TurnUsage.model_validate(usage),
+        steps=[AgentStep.model_validate(step) for step in _loads(row["steps"]) or []],
         error=row["error"] or "",
         created_at=row["created_at"],
     )
@@ -106,9 +108,9 @@ class ConversationRepository:
             await conn.execute(
                 "INSERT INTO conversation_turns (conversation_id, ordinal, kind, "
                 "question, query, result, answer, explanation, notes, "
-                "model_version, usage, error) VALUES "
+                "model_version, usage, steps, error) VALUES "
                 "($1::uuid, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9::jsonb, "
-                "$10, $11::jsonb, $12)",
+                "$10, $11::jsonb, $12::jsonb, $13)",
                 conversation_id,
                 ordinal,
                 turn.kind,
@@ -123,6 +125,7 @@ class ConversationRepository:
                 _json(turn.notes),
                 turn.model_version,
                 _json(turn.usage.model_dump(mode="json")),
+                _json([step.model_dump(mode="json") for step in turn.steps]),
                 turn.reason if turn.kind == "error" else None,
             )
             # The first question names the thread — a title nobody has to

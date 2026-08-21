@@ -9,6 +9,7 @@ list of what the model is missing, and nothing else records it.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -306,3 +307,55 @@ def test_threads_are_listed_per_source() -> None:
 
     assert len(listed) == 1
     assert listed[0]["turn_count"] == 1
+
+
+def test_the_stream_reports_each_step_then_the_turn() -> None:
+    """Ten seconds behind a spinner is the thing being fixed. What streams is
+    the work, not the answer being written — the number is computed once the
+    query has run, so there is no text being composed a word at a time."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    with client.stream(
+        "POST", "/api/v1/datasources/scp/chat/stream", json={"question": "học phí đã thu"}
+    ) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        name = ""
+        for line in response.iter_lines():
+            if line.startswith("event: "):
+                name = line.removeprefix("event: ")
+            elif line.startswith("data: "):
+                events.append((name, json.loads(line.removeprefix("data: "))))
+
+    kinds = [name for name, _ in events]
+    assert kinds[-1] == "turn"
+    assert kinds[:-1] == ["step"] * (len(kinds) - 1)
+
+    labels = [payload["label"] for name, payload in events if name == "step"]
+    assert "Reading the semantic model" in labels
+    assert any(label.startswith("Running") for label in labels)
+
+    turn = events[-1][1]
+    assert turn["kind"] == "answer"
+    # The same steps travel with the turn, so reopening the thread shows them.
+    assert [s["label"] for s in turn["steps"]] == labels
+
+
+def test_a_failure_arrives_as_an_event_not_a_cut_stream() -> None:
+    """The 200 has already gone out by then; raising would reach the browser as
+    a truncated stream with nothing to show for it."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    with client.stream(
+        "POST",
+        "/api/v1/datasources/scp/chat/stream",
+        json={"question": "gì đó", "conversation_id": "not-a-real-thread"},
+    ) as response:
+        assert response.status_code == 200
+        name = ""
+        for line in response.iter_lines():
+            if line.startswith("event: "):
+                name = line.removeprefix("event: ")
+            elif line.startswith("data: "):
+                events.append((name, json.loads(line.removeprefix("data: "))))
+
+    assert events[-1][0] == "error"
+    assert "not-a-real-thread" in events[-1][1]["detail"]
