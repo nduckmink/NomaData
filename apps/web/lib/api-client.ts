@@ -826,6 +826,15 @@ export interface QueryResult {
   truncated: boolean
 }
 
+/** What one turn cost: an agent turn is several provider calls, not one. */
+export interface TurnUsage {
+  tokens_in: number
+  tokens_out: number
+  latency_ms: number
+  llm_calls: number
+  tool_calls: number
+}
+
 /** One answered (or declined) question. `kind` decides which fields matter. */
 export interface AgentTurn {
   kind: "answer" | "clarify" | "refuse" | "error"
@@ -837,11 +846,44 @@ export interface AgentTurn {
   notes: string[]
   clarification: string
   reason: string
+  conversation_id: string
+  ordinal: number
+  /** The published model version that answered — an answer from an older one
+   *  cannot be reproduced, and the reader has to be told rather than assume. */
+  model_version: number | null
+  usage: TurnUsage
+}
+
+/** A stored turn, read back when a thread is reopened. */
+export interface ConversationTurn {
+  ordinal: number
+  kind: AgentTurn["kind"]
+  question: string
+  query?: AnalyticalQuery | null
+  result?: QueryResult | null
+  answer: string
+  explanation: string
+  notes: string[]
+  model_version: number | null
+  usage: TurnUsage
+  error: string
+  created_at: string | null
+}
+
+export interface Conversation {
+  id: string
+  source_id: string
+  title: string
+  turns: ConversationTurn[]
+  turn_count: number
+  created_at: string | null
+  updated_at: string | null
 }
 
 export async function ask(
   name: string,
   question: string,
+  conversationId?: string | null,
   signal?: AbortSignal
 ): Promise<AgentTurn> {
   const res = await fetch(
@@ -849,10 +891,48 @@ export async function ask(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      // Omitted, not null: the API starts a thread when none is named, so the
+      // page never has to create one before the first question.
+      body: JSON.stringify(
+        conversationId
+          ? { question, conversation_id: conversationId }
+          : { question }
+      ),
       signal,
     }
   )
   if (!res.ok) throw new Error(await errorDetail(res))
   return (await res.json()) as AgentTurn
+}
+
+export function listConversations(
+  name: string,
+  signal?: AbortSignal
+): Promise<Conversation[]> {
+  return getJSON<Conversation[]>(
+    `/api/v1/datasources/${encodeURIComponent(name)}/conversations`,
+    signal
+  )
+}
+
+export function getConversation(
+  name: string,
+  id: string,
+  signal?: AbortSignal
+): Promise<Conversation> {
+  return getJSON<Conversation>(
+    `/api/v1/datasources/${encodeURIComponent(name)}/conversations/${encodeURIComponent(id)}`,
+    signal
+  )
+}
+
+export async function deleteConversation(
+  name: string,
+  id: string
+): Promise<void> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/datasources/${encodeURIComponent(name)}/conversations/${encodeURIComponent(id)}`,
+    { method: "DELETE" }
+  )
+  if (!res.ok) throw new Error(await errorDetail(res))
 }

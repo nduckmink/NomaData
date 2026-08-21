@@ -1,23 +1,31 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import {
   RiChat3Line,
   RiErrorWarningLine,
+  RiForbid2Line,
   RiLoader4Line,
   RiSendPlane2Line,
 } from "@remixicon/react"
+import { toast } from "sonner"
 
 import {
   type AgentTurn,
   ask,
+  type Conversation,
+  type ConversationTurn,
+  deleteConversation,
+  getConversation,
   getSemanticOverview,
+  listConversations,
   type QueryResult,
   type SemanticModelSummary,
+  type TurnUsage,
 } from "@/lib/api-client"
 import {
-  Conversation,
+  Conversation as ConversationView,
   ConversationContent,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation"
@@ -43,10 +51,11 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { PageContainer } from "@/components/page-header"
 import { cn } from "@/lib/utils"
+import { ConversationList } from "@/app/ask/conversation-list"
 
-/** A single exchange the page tracks locally (no persistence yet — that's a
- *  later wave). `pending` is in flight; `failed` is an HTTP-level error (no AI
- *  provider, no published model); a `turn` is whatever the agent decided. */
+/** A single exchange on screen. `pending` is in flight; `failed` is an
+ *  HTTP-level error (no AI provider, no published model); a `turn` is whatever
+ *  the agent decided. */
 type Exchange = {
   question: string
   status: "pending" | "done" | "failed"
@@ -56,6 +65,31 @@ type Exchange = {
 
 const MAX_TABLE_ROWS = 50
 
+/** A stored turn read back from a thread, shown the same way a live one is. */
+function toExchange(turn: ConversationTurn): Exchange {
+  return {
+    question: turn.question,
+    status: "done",
+    turn: {
+      kind: turn.kind,
+      question: turn.question,
+      query: turn.query,
+      result: turn.result,
+      answer: turn.answer,
+      explanation: turn.explanation,
+      notes: turn.notes,
+      // Stored turns keep one user-facing text column whatever the kind, so
+      // a reopened clarification reads as it did when it was asked.
+      clarification: turn.kind === "clarify" ? turn.answer : "",
+      reason: turn.kind === "refuse" ? turn.answer : turn.error,
+      conversation_id: "",
+      ordinal: turn.ordinal,
+      model_version: turn.model_version,
+      usage: turn.usage,
+    },
+  }
+}
+
 export default function AskPage() {
   const [sources, setSources] = useState<SemanticModelSummary[]>([])
   const [source, setSource] = useState<string | null>(null)
@@ -63,6 +97,13 @@ export default function AskPage() {
   const [exchanges, setExchanges] = useState<Exchange[]>([])
   const [input, setInput] = useState("")
   const [asking, setAsking] = useState(false)
+  // The thread this page is adding to. Null until the first question — the API
+  // starts one and hands the id back, so nothing has to be created up front.
+  const [conversationId, setConversationId] = useState<string | null>(null)
+  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [threadsLoading, setThreadsLoading] = useState(false)
+
+  const live = sources.find((s) => s.source_id === source)
 
   // Only sources with a published model can answer — the query layer reads what
   // was published, never a draft.
@@ -84,6 +125,33 @@ export default function AskPage() {
     return () => controller.abort()
   }, [])
 
+  const loadThreads = useCallback(
+    async (name: string, signal?: AbortSignal) => {
+      setThreadsLoading(true)
+      try {
+        const list = await listConversations(name, signal)
+        if (!signal?.aborted) setConversations(list)
+      } catch {
+        // The app database may be down; asking still works without history.
+        if (!signal?.aborted) setConversations([])
+      } finally {
+        if (!signal?.aborted) setThreadsLoading(false)
+      }
+    },
+    []
+  )
+
+  // Switching source starts a fresh thread: a conversation belongs to the model
+  // it was asked against, where its metric names mean what they meant.
+  useEffect(() => {
+    if (!source) return
+    const controller = new AbortController()
+    setExchanges([])
+    setConversationId(null)
+    void loadThreads(source, controller.signal)
+    return () => controller.abort()
+  }, [source, loadThreads])
+
   async function send(raw: string) {
     const question = raw.trim()
     if (!question || !source || asking) return
@@ -91,8 +159,10 @@ export default function AskPage() {
     setAsking(true)
     setExchanges((xs) => [...xs, { question, status: "pending" }])
     try {
-      const turn = await ask(source, question)
+      const turn = await ask(source, question, conversationId)
       setExchanges((xs) => _replaceLast(xs, { question, status: "done", turn }))
+      if (turn.conversation_id) setConversationId(turn.conversation_id)
+      void loadThreads(source)
     } catch (e) {
       setExchanges((xs) =>
         _replaceLast(xs, {
@@ -103,6 +173,31 @@ export default function AskPage() {
       )
     } finally {
       setAsking(false)
+    }
+  }
+
+  async function openThread(id: string) {
+    if (!source || asking) return
+    try {
+      const thread = await getConversation(source, id)
+      setConversationId(thread.id)
+      setExchanges(thread.turns.map(toExchange))
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not open that.")
+    }
+  }
+
+  async function removeThread(id: string) {
+    if (!source) return
+    try {
+      await deleteConversation(source, id)
+      if (id === conversationId) {
+        setConversationId(null)
+        setExchanges([])
+      }
+      void loadThreads(source)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not delete that.")
     }
   }
 
@@ -137,80 +232,100 @@ export default function AskPage() {
 
   return (
     <PageContainer variant="fill">
-      <div className="mx-auto flex h-full w-full max-w-3xl flex-col">
-        <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
-          <span className="text-sm font-medium">Ask</span>
-          {sources.length > 1 ? (
-            <Select
-              value={source ?? ""}
-              onValueChange={(v) => setSource(v)}
-              disabled={asking}
-            >
-              <SelectTrigger
-                className="w-56 font-mono"
-                aria-label="Data source"
+      <div className="flex h-full w-full">
+        <ConversationList
+          conversations={conversations}
+          activeId={conversationId}
+          loading={threadsLoading}
+          onOpen={(id) => void openThread(id)}
+          onNew={() => {
+            setConversationId(null)
+            setExchanges([])
+          }}
+          onDelete={(id) => void removeThread(id)}
+        />
+
+        <div className="mx-auto flex h-full w-full max-w-3xl flex-col">
+          <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
+            <span className="text-sm font-medium">Ask</span>
+            {sources.length > 1 ? (
+              <Select
+                value={source ?? ""}
+                onValueChange={(v) => setSource(v)}
+                disabled={asking}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {sources.map((s) => (
-                  <SelectItem key={s.source_id} value={s.source_id}>
-                    {s.source_id}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <Badge variant="outline" className="font-mono">
-              {source}
-            </Badge>
-          )}
-        </div>
-
-        <Conversation className="min-h-0 flex-1">
-          <ConversationContent className="space-y-6">
-            {exchanges.length === 0 && (
-              <div className="flex flex-col items-center gap-2 pt-10 text-center">
-                <p className="text-sm text-muted-foreground">
-                  Ask about {source} in plain language.
-                </p>
-              </div>
+                <SelectTrigger
+                  className="w-56 font-mono"
+                  aria-label="Data source"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {sources.map((s) => (
+                    <SelectItem key={s.source_id} value={s.source_id}>
+                      {s.source_id}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Badge variant="outline" className="font-mono">
+                {source}
+              </Badge>
             )}
-            {exchanges.map((x, i) => (
-              <ExchangeView key={i} exchange={x} />
-            ))}
-          </ConversationContent>
-          <ConversationScrollButton />
-        </Conversation>
+          </div>
 
-        <div className="border-t p-3">
-          <div className="flex items-end gap-2">
-            <Textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault()
-                  void send(input)
-                }
-              }}
-              placeholder={`Ask ${source}…`}
-              rows={1}
-              className="max-h-40 min-h-9 flex-1 resize-none"
-              disabled={asking}
-            />
-            <Button
-              onClick={() => void send(input)}
-              disabled={asking || !input.trim()}
-              size="icon"
-              aria-label="Send"
-            >
-              {asking ? (
-                <RiLoader4Line className="animate-spin" />
-              ) : (
-                <RiSendPlane2Line />
+          <ConversationView className="min-h-0 flex-1">
+            <ConversationContent className="space-y-6">
+              {exchanges.length === 0 && (
+                <div className="flex flex-col items-center gap-2 pt-10 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    Ask about {source} in plain language.
+                  </p>
+                </div>
               )}
-            </Button>
+              {exchanges.map((x, i) => (
+                <ExchangeView
+                  key={i}
+                  exchange={x}
+                  liveVersion={live?.published_version ?? null}
+                />
+              ))}
+            </ConversationContent>
+            <ConversationScrollButton />
+          </ConversationView>
+
+          <div className="border-t p-3">
+            <div className="flex items-end gap-2">
+              <Textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault()
+                    void send(input)
+                  }
+                }}
+                placeholder={
+                  exchanges.length > 0 ? "Ask a follow-up…" : `Ask ${source}…`
+                }
+                rows={1}
+                className="max-h-40 min-h-9 flex-1 resize-none"
+                disabled={asking}
+              />
+              <Button
+                onClick={() => void send(input)}
+                disabled={asking || !input.trim()}
+                size="icon"
+                aria-label="Send"
+              >
+                {asking ? (
+                  <RiLoader4Line className="animate-spin" />
+                ) : (
+                  <RiSendPlane2Line />
+                )}
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -224,7 +339,13 @@ function _replaceLast(xs: Exchange[], next: Exchange): Exchange[] {
   return copy
 }
 
-function ExchangeView({ exchange }: { exchange: Exchange }) {
+function ExchangeView({
+  exchange,
+  liveVersion,
+}: {
+  exchange: Exchange
+  liveVersion: number | null
+}) {
   return (
     <div className="flex flex-col gap-2">
       <div className="self-end rounded-lg bg-accent-brand/10 px-3 py-2 text-sm">
@@ -247,32 +368,52 @@ function ExchangeView({ exchange }: { exchange: Exchange }) {
       )}
 
       {exchange.status === "done" && exchange.turn && (
-        <TurnView turn={exchange.turn} />
+        <TurnView turn={exchange.turn} liveVersion={liveVersion} />
       )}
     </div>
   )
 }
 
-function TurnView({ turn }: { turn: AgentTurn }) {
+function TurnView({
+  turn,
+  liveVersion,
+}: {
+  turn: AgentTurn
+  liveVersion: number | null
+}) {
   if (turn.kind === "clarify") {
     return (
-      <Alert>
-        <RiChat3Line />
-        <AlertTitle>One thing first</AlertTitle>
-        <AlertDescription>{turn.clarification}</AlertDescription>
-      </Alert>
+      <div className="flex flex-col gap-1.5">
+        <Alert>
+          <RiChat3Line />
+          <AlertTitle>One thing first</AlertTitle>
+          <AlertDescription>{turn.clarification}</AlertDescription>
+        </Alert>
+        <CostLine usage={turn.usage} />
+      </div>
     )
   }
   if (turn.kind === "refuse") {
-    return <p className="text-sm text-muted-foreground">{turn.reason}</p>
+    return (
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-start gap-2 rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+          <RiForbid2Line className="mt-0.5 size-4 shrink-0" />
+          <span>{turn.reason}</span>
+        </div>
+        <CostLine usage={turn.usage} />
+      </div>
+    )
   }
   if (turn.kind === "error") {
     return (
-      <Alert variant="destructive">
-        <RiErrorWarningLine />
-        <AlertTitle>Couldn&apos;t answer</AlertTitle>
-        <AlertDescription>{turn.reason}</AlertDescription>
-      </Alert>
+      <div className="flex flex-col gap-1.5">
+        <Alert variant="destructive">
+          <RiErrorWarningLine />
+          <AlertTitle>Couldn&apos;t answer</AlertTitle>
+          <AlertDescription>{turn.reason}</AlertDescription>
+        </Alert>
+        <CostLine usage={turn.usage} />
+      </div>
     )
   }
 
@@ -285,7 +426,7 @@ function TurnView({ turn }: { turn: AgentTurn }) {
     <div className="flex flex-col gap-3 rounded-lg border p-3">
       {scalar && result ? (
         <div className="text-2xl font-semibold tracking-tight tnum">
-          {formatValue(Object.values(result.rows[0])[0])}
+          {formatValue(result.rows[0][result.columns[0].name])}
         </div>
       ) : (
         result && <ResultTable result={result} />
@@ -300,6 +441,11 @@ function TurnView({ turn }: { turn: AgentTurn }) {
         </p>
       ))}
 
+      <StaleModelNote
+        answeredOn={turn.model_version}
+        liveVersion={liveVersion}
+      />
+
       {turn.query && (
         <details className="text-xs text-muted-foreground">
           <summary className="cursor-pointer select-none hover:text-foreground">
@@ -310,8 +456,57 @@ function TurnView({ turn }: { turn: AgentTurn }) {
           </pre>
         </details>
       )}
+
+      <CostLine usage={turn.usage} />
     </div>
   )
+}
+
+/** An answer from an older model version cannot be reproduced against the one
+ *  that is live now. Saying nothing lets the number stand as if it still held. */
+function StaleModelNote({
+  answeredOn,
+  liveVersion,
+}: {
+  answeredOn: number | null
+  liveVersion: number | null
+}) {
+  if (answeredOn == null || liveVersion == null || answeredOn >= liveVersion) {
+    return null
+  }
+  return (
+    <p className="text-xs text-amber-700 dark:text-amber-400">
+      Answered on model v{answeredOn}; v{liveVersion} is live now. Ask again to
+      get this number from the current model.
+    </p>
+  )
+}
+
+/** What the turn cost, small and always present. It is the only thing that
+ *  stops the price of a question from growing unnoticed. */
+function CostLine({ usage }: { usage?: TurnUsage }) {
+  if (!usage || usage.llm_calls === 0) return null
+  const seconds = (usage.latency_ms / 1000).toFixed(1)
+  const tokens = usage.tokens_in + usage.tokens_out
+  const parts = [
+    `${usage.llm_calls} ${usage.llm_calls === 1 ? "call" : "calls"}`,
+    `${seconds}s`,
+  ]
+  if (tokens > 0) parts.push(`${formatTokens(tokens)} tokens`)
+  if (usage.tool_calls > 0) {
+    parts.push(
+      `${usage.tool_calls} ${usage.tool_calls === 1 ? "tool" : "tools"}`
+    )
+  }
+  return (
+    <p className="text-[11px] text-muted-foreground tnum">
+      {parts.join(" · ")}
+    </p>
+  )
+}
+
+function formatTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 }
 
 function ResultTable({ result }: { result: QueryResult }) {
