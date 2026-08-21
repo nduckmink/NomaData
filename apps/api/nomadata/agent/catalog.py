@@ -11,16 +11,56 @@ question and the card says it was trimmed, rather than dropping some silently.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from nomadata.agent.resolver import queryable_metrics
 from nomadata.core.models import Entity, MetricDefinition, SemanticGraph
 
-_WORD = re.compile(r"[A-Za-zÀ-ỹ0-9_]+")
+_WORD = re.compile(r"[A-Za-z0-9_]+")
 _MAX_DIMS_PER_ENTITY = 24
+
+#: `đ` is not an accented `d`, so decomposition cannot reach it and it would be
+#: dropped outright — the same substitution the Cube identifier folder makes.
+_STANDALONE_LETTERS = str.maketrans({"đ": "d", "Đ": "D"})
 
 
 def _tokens(text: str) -> set[str]:
-    return {t.lower() for t in _WORD.findall(text or "") if len(t) > 1}
+    """Comparable words, with Vietnamese accents folded away.
+
+    People type Vietnamese without diacritics constantly — "tong so tien ung
+    luong" for "Tổng số tiền ứng lương". Matching those as different words made
+    every accent-free question score zero against every metric, so the card fell
+    back to graph order: 122 auto-generated Count metrics, and not one of the
+    real ones. The agent then truthfully reported that the model had nothing but
+    counts.
+    """
+    folded = unicodedata.normalize("NFKD", (text or "").translate(_STANDALONE_LETTERS))
+    ascii_text = folded.encode("ascii", "ignore").decode("ascii")
+    return {t.lower() for t in _WORD.findall(ascii_text) if len(t) > 1}
+
+
+def _rank(metric: MetricDefinition, wanted: set[str]) -> tuple[int, int]:
+    """How much of the card a metric deserves: relevance first, substance second.
+
+    The build gives every table a `<Entity> Count`, so a large model is mostly
+    counts — 122 of them here against 16 metrics a person or the AI actually
+    designed. On a question that matches nothing in particular they all tie at
+    zero relevance, and the counts win purely by being first in the graph. The
+    second key breaks that tie towards the metrics someone meant.
+    """
+    relevance = len(wanted & _tokens(f"{metric.name} {metric.description or ''}"))
+    designed = 0 if _is_plain_count(metric) else 1
+    return relevance, designed
+
+
+def _is_plain_count(metric: MetricDefinition) -> bool:
+    """An unfiltered row count — what the heuristic build makes for every table."""
+    return (
+        metric.aggregation is not None
+        and metric.aggregation.value == "count"
+        and not metric.filters
+        and not metric.column
+    )
 
 
 def _time_label(metric: MetricDefinition, by_key: dict[str, Entity]) -> str:
@@ -48,11 +88,7 @@ def model_card(
     trimmed = False
     if len(metrics) > max_metrics:
         wanted = _tokens(question)
-        metrics = sorted(
-            metrics,
-            key=lambda m: len(wanted & _tokens(f"{m.name} {m.description or ''}")),
-            reverse=True,
-        )[:max_metrics]
+        metrics = sorted(metrics, key=lambda m: _rank(m, wanted), reverse=True)[:max_metrics]
         trimmed = True
 
     lines: list[str] = []
@@ -104,7 +140,11 @@ def model_card(
             dim_lines.append(f"- {entity.name}: {', '.join(dims)}")
     if dim_lines:
         lines.append("")
-        lines.append("DIMENSIONS (slice by these, grouped by entity):")
+        lines.append(
+            "DIMENSIONS (slice by these, grouped by entity). Several entities "
+            'can share a name, so write one as "Entity.Name" whenever the '
+            "question is not about the entity the metric measures:"
+        )
         lines.extend(dim_lines)
 
     rels = [

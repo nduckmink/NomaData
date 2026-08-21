@@ -403,12 +403,26 @@ class MemberMap(BaseModel):
     measure_ids: dict[str, str] = Field(default_factory=dict)
     #: metric id -> the business name, for messages
     measure_labels: dict[str, str] = Field(default_factory=dict)
-    #: normalised "Entity.Dimension" and bare "Dimension" -> "Cube.dim"
-    dimensions: dict[str, str] = Field(default_factory=dict)
+    #: normalised "Entity.Dimension" and bare "Dimension" -> every member it
+    #: could mean. A bare name like "Status" usually exists on several tables,
+    #: so the choice belongs to the caller (who knows what is being measured),
+    #: not to whichever entity happened to be registered first.
+    dimension_options: dict[str, list[str]] = Field(default_factory=dict)
     #: the same, restricted to time dimensions
-    time_dimensions: dict[str, str] = Field(default_factory=dict)
+    time_options: dict[str, list[str]] = Field(default_factory=dict)
+    #: member -> "Entity.Dimension", the unambiguous name to show a caller
+    member_labels: dict[str, str] = Field(default_factory=dict)
     #: entity key -> cube name, for building join-aware suggestions
     cubes: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def dimensions(self) -> dict[str, str]:
+        """First candidate per name — for listing, never for resolving."""
+        return {name: members[0] for name, members in self.dimension_options.items() if members}
+
+    @property
+    def time_dimensions(self) -> dict[str, str]:
+        return {name: members[0] for name, members in self.time_options.items() if members}
 
     def measure(self, name_or_id: str) -> str | None:
         """The Cube member for a metric named or identified by ``name_or_id``."""
@@ -420,6 +434,13 @@ class MemberMap(BaseModel):
         if normalised:
             return normalised
         return name_or_id if name_or_id in self.measures else None
+
+
+def _offer(options: dict[str, list[str]], key: str, member: str) -> None:
+    """Record a member as one meaning of ``key``, keeping entity order."""
+    candidates = options.setdefault(key, [])
+    if member not in candidates:
+        candidates.append(member)
 
 
 def normalise(name: str) -> str:
@@ -466,9 +487,19 @@ def member_map(graph: SemanticGraph) -> MemberMap:
         members += [(d.name, d.column, d.kind) for d in entity.dimensions if not d.hidden]
         for label, column, kind in members:
             member = f"{cube}.{_ident(column)}"
-            for key in (f"{entity.name}.{label}", label, f"{entity.name}.{column}", column):
-                result.dimensions.setdefault(normalise(key), member)
+            result.member_labels.setdefault(member, f"{entity.name}.{label}")
+            # The card groups dimensions as "Entity: Name", so a model copies
+            # that form back verbatim. It names one real dimension, unambiguously
+            # — accept it rather than rejecting the model's own vocabulary.
+            for key in (
+                f"{entity.name}.{label}",
+                f"{entity.name}: {label}",
+                label,
+                f"{entity.name}.{column}",
+                column,
+            ):
+                _offer(result.dimension_options, normalise(key), member)
                 if kind == DimensionKind.time:
-                    result.time_dimensions.setdefault(normalise(key), member)
+                    _offer(result.time_options, normalise(key), member)
 
     return result

@@ -80,24 +80,19 @@ class AgentRuntime:
         card = model_card(graph, question=question)
         plan = await self._plan(question, card, context)
 
+        # No fallback text here on purpose. ``QueryPlan`` now rejects a reply
+        # whose kind carries nothing, so a clarification is one the model
+        # actually wrote — not a sentence we invented to cover a broken reply
+        # and then showed the user as if the model had asked it.
         if plan.kind == "clarify":
-            return AgentTurn(
-                kind="clarify",
-                question=question,
-                clarification=plan.clarification or "Could you rephrase that?",
-            )
+            return AgentTurn(kind="clarify", question=question, clarification=plan.clarification)
         if plan.kind == "refuse":
+            return AgentTurn(kind="refuse", question=question, reason=plan.reason)
+        if plan.query is None:  # pragma: no cover - the validator forbids it
             return AgentTurn(
-                kind="refuse",
+                kind="error",
                 question=question,
-                reason=plan.reason or "I can only answer questions about this data source.",
-            )
-        if plan.query is None:
-            return AgentTurn(
-                kind="clarify",
-                question=question,
-                clarification="I couldn't turn that into a query — can you be "
-                "more specific about what to measure?",
+                reason="The assistant returned a plan with no query.",
             )
 
         business = plan.query
@@ -191,7 +186,10 @@ def _summarize(result: QueryResult) -> str:
     if not result.rows:
         return "No matching rows."
     if len(result.rows) == 1 and len(result.columns) == 1:
-        return str(next(iter(result.rows[0].values())))
+        value = next(iter(result.rows[0].values()))
+        # A sum over nothing comes back as one NULL row, not zero rows. Printing
+        # "None" reads like a failure; it means the period was empty.
+        return "No matching rows." if value is None else str(value)
     suffix = "+" if result.truncated else ""
     return f"{result.row_count}{suffix} rows"
 

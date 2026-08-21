@@ -227,7 +227,16 @@ class OpenAICompatibleProvider(AIProvider):
                 return schema.model_validate_json(_strip_fences(content))
             except (ValidationError, ValueError) as exc:
                 last_error = str(exc)[:500]
-                log.warning("ai.structured.invalid", attempt=attempt, error=last_error)
+                # The reply itself, not only the complaint about it. Without it
+                # a rejected plan is invisible: "field required" says nothing
+                # about what the model actually decided to send.
+                log.warning(
+                    "ai.structured.invalid",
+                    attempt=attempt,
+                    error=last_error,
+                    schema=schema.__name__,
+                    reply=content[:1000],
+                )
 
         raise AIProviderError(f"AI provider did not return valid {schema.__name__}: {last_error}")
 

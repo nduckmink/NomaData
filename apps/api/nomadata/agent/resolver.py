@@ -94,15 +94,22 @@ def resolve(query: AnalyticalQuery, graph: SemanticGraph) -> ResolvedQuery:
         chosen.append(by_id[metric_id])
         measures.append(mapping.measures[metric_id])
 
+    # Which cubes the answer is measured on. A bare dimension name ("Status")
+    # usually exists on several tables; the one that belongs to the metric being
+    # measured is the one meant. Without this the query slices a total on one
+    # table by a column on an unrelated one, and Cube fails on the join.
+    home = {member.split(".", 1)[0] for member in measures}
+
     return ResolvedQuery(
         measures=measures,
-        dimensions=[_dimension(name, mapping) for name in query.dimensions],
+        dimensions=[_dimension(name, mapping, home) for name in query.dimensions],
         filters=[
-            f.model_copy(update={"field": _dimension(f.field, mapping)}) for f in query.filters
+            f.model_copy(update={"field": _dimension(f.field, mapping, home)})
+            for f in query.filters
         ],
-        time=_time(query.time, chosen, mapping, notes),
+        time=_time(query.time, chosen, mapping, home, notes),
         limit=query.limit,
-        order_by=[_order(o, mapping) for o in query.order_by],
+        order_by=[_order(o, mapping, home) for o in query.order_by],
         notes=notes,
     )
 
@@ -111,6 +118,7 @@ def _time(
     spec: TimeSpec | None,
     metrics: list[MetricDefinition],
     mapping: MemberMap,
+    home: set[str],
     notes: list[str],
 ) -> TimeSpec | None:
     """Resolve the time axis, defaulting to the one the metrics declare.
@@ -143,55 +151,99 @@ def _time(
             field="time.dimension",
         )
 
-    member = mapping.time_dimensions.get(normalise(wanted))
-    if member is None:
-        _fail(
-            f"{wanted!r} is not a date column in this model.",
-            field="time.dimension",
-            value=wanted,
-            candidates=_labels(mapping.time_dimensions),
-        )
-        raise AssertionError("unreachable")  # pragma: no cover
+    member = _pick(
+        wanted,
+        mapping.time_options.get(normalise(wanted), []),
+        home,
+        mapping,
+        field="time.dimension",
+        missing=f"{wanted!r} is not a date column in this model.",
+        candidates=_labels(mapping.time_options),
+    )
 
     # Measuring by another date is allowed — but the answer has to say so, since
     # the number itself gives no hint that it happened.
-    if default and mapping.time_dimensions.get(normalise(default)) != member:
+    default_member = _pick_quietly(mapping.time_options.get(normalise(default), []), home)
+    if default and default_member != member:
         notes.append(f"Measured by {wanted}, though this metric is normally measured by {default}.")
     return spec.model_copy(update={"dimension": member})
 
 
-def _dimension(name: str, mapping: MemberMap) -> str:
-    member = mapping.dimensions.get(normalise(name))
-    if member is None:
-        _fail(
-            f"No dimension called {name!r} in this model.",
-            field="dimensions",
-            value=name,
-            candidates=_labels(mapping.dimensions),
-        )
+def _dimension(name: str, mapping: MemberMap, home: set[str]) -> str:
+    return _pick(
+        name,
+        mapping.dimension_options.get(normalise(name), []),
+        home,
+        mapping,
+        field="dimensions",
+        missing=f"No dimension called {name!r} in this model.",
+        candidates=_labels(mapping.dimension_options),
+    )
+
+
+def _pick_quietly(options: list[str], home: set[str]) -> str | None:
+    """The one member ``options`` can mean here, or ``None`` if still unclear."""
+    if len(options) == 1:
+        return options[0]
+    on_home = [m for m in options if m.split(".", 1)[0] in home]
+    return on_home[0] if len(on_home) == 1 else None
+
+
+def _pick(
+    name: str,
+    options: list[str],
+    home: set[str],
+    mapping: MemberMap,
+    *,
+    field: str,
+    missing: str,
+    candidates: list[str],
+) -> str:
+    """Choose the member ``name`` means, given what is being measured.
+
+    One candidate is the answer even when it sits on another table — Cube joins
+    it if the model says how. Several candidates are only resolved by the
+    metric's own table; past that the caller is asked which, because guessing
+    here produces a number sliced by a column from an unrelated table.
+    """
+    if not options:
+        _fail(missing, field=field, value=name, candidates=candidates)
         raise AssertionError("unreachable")  # pragma: no cover
-    return member
+
+    chosen = _pick_quietly(options, home)
+    if chosen is not None:
+        return chosen
+
+    where = ", ".join(sorted(mapping.member_labels.get(m, m) for m in options))
+    raise QueryValidationError(
+        f"More than one table has {name!r} ({where}). Say which one you mean, "
+        "written as 'Table.Name'.",
+        field=field,
+        value=name,
+    )
 
 
-def _order(term: str, mapping: MemberMap) -> str:
+def _order(term: str, mapping: MemberMap, home: set[str]) -> str:
     """Ordering names a measure or a dimension, optionally prefixed with ``-``."""
     descending = term.startswith("-")
     name = term.lstrip("-")
-    member = mapping.measure(name) or mapping.dimensions.get(normalise(name))
+    member = mapping.measure(name) or _pick_quietly(
+        mapping.dimension_options.get(normalise(name), []), home
+    )
     if member is None:
         _fail(
             f"Cannot order by {name!r} — it is neither a metric nor a dimension here.",
             field="order_by",
             value=name,
-            candidates=[*mapping.measure_labels.values(), *_labels(mapping.dimensions)],
+            candidates=[*mapping.measure_labels.values(), *_labels(mapping.dimension_options)],
         )
         raise AssertionError("unreachable")  # pragma: no cover
     return f"-{member}" if descending else member
 
 
-def _labels(members: dict[str, str]) -> list[str]:
+def _labels(options: dict[str, list[str]]) -> list[str]:
     """Readable names worth suggesting, one per member rather than every alias."""
-    return sorted({member.split(".", 1)[-1] for member in members.values()})
+    return sorted({m.split(".", 1)[-1] for members in options.values() for m in members})
 
 
 def _suggest(value: str, candidates: list[str]) -> str:

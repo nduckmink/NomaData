@@ -60,7 +60,12 @@ def _graph() -> SemanticGraph:
                 name="Học sinh",
                 table="hoc_sinh",
                 primary_key="id",
-                dimensions=[Dimension(name="Cơ sở", column="co_so", kind=DimensionKind.string)],
+                dimensions=[
+                    Dimension(name="Cơ sở", column="co_so", kind=DimensionKind.string),
+                    # Real schemas repeat these names on every table.
+                    Dimension(name="Trạng thái", column="trang_thai", kind=DimensionKind.string),
+                    Dimension(name="Ngày tạo", column="ngay_tao", kind=DimensionKind.time),
+                ],
             ),
         ],
         metrics=[
@@ -127,6 +132,70 @@ def test_a_metric_qualified_by_its_cube_id_still_resolves() -> None:
     resolved = resolve(AnalyticalQuery(measures=["hoc_phi.Học phí đã thu"]), graph)
 
     assert resolved.measures == ["hoc_phi.Hoc_phi_da_thu"]
+
+
+def test_a_shared_dimension_name_resolves_on_the_measured_table() -> None:
+    """Two tables have a "Trạng thái"; the one meant belongs to the metric.
+
+    Picking whichever entity was registered first slices a total on one table by
+    a column on an unrelated one — Cube then fails with "can't find join path",
+    and the caller is told nothing about a query they never wrote that way.
+    """
+    resolved = resolve(
+        AnalyticalQuery(measures=["Học phí đã thu"], dimensions=["Trạng thái"]), _graph()
+    )
+    assert resolved.dimensions == ["hoc_phi.trang_thai"]
+
+    other = resolve(AnalyticalQuery(measures=["Số học sinh"], dimensions=["Trạng thái"]), _graph())
+    assert other.dimensions == ["hoc_sinh.trang_thai"]
+
+
+def test_a_shared_date_name_resolves_on_the_measured_table() -> None:
+    """The metric's own default date must not land on another table's column."""
+    resolved = resolve(
+        AnalyticalQuery(measures=["Số phiếu"], time=TimeSpec(dimension="", range="this_month")),
+        _graph(),
+    )
+    assert resolved.time is not None
+    assert resolved.time.dimension == "hoc_phi.ngay_tao"
+
+
+def test_a_shared_name_can_still_be_qualified() -> None:
+    resolved = resolve(
+        AnalyticalQuery(measures=["Học phí đã thu"], dimensions=["Học sinh.Trạng thái"]), _graph()
+    )
+    assert resolved.dimensions == ["hoc_sinh.trang_thai"]
+
+
+def test_an_unqualified_name_off_the_measured_table_is_asked_about() -> None:
+    """Neither candidate is on the measured table: ask, never pick one."""
+    graph = _graph()
+    graph.entities[0].dimensions = [
+        d for d in graph.entities[0].dimensions if d.column != "trang_thai"
+    ]
+    graph.entities.append(
+        Entity(
+            key="app.lop",
+            name="Lớp",
+            table="lop",
+            primary_key="id",
+            dimensions=[
+                Dimension(name="Trạng thái", column="trang_thai", kind=DimensionKind.string)
+            ],
+        )
+    )
+
+    with pytest.raises(QueryValidationError) as excinfo:
+        resolve(AnalyticalQuery(measures=["Học phí đã thu"], dimensions=["Trạng thái"]), graph)
+
+    assert "More than one table" in str(excinfo.value)
+    assert "Học sinh.Trạng thái" in str(excinfo.value)
+
+
+def test_a_dimension_on_another_table_alone_still_resolves() -> None:
+    """One candidate is unambiguous even off the measured table — Cube joins it."""
+    resolved = resolve(AnalyticalQuery(measures=["Học phí đã thu"], dimensions=["Cơ sở"]), _graph())
+    assert resolved.dimensions == ["hoc_sinh.co_so"]
 
 
 def test_filters_and_order_are_translated_too() -> None:

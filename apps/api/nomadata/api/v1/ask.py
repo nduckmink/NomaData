@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
+from nomadata.agent.resolver import QueryValidationError
 from nomadata.agent.runtime import AgentRuntime
 from nomadata.core.errors import (
     QueryEngineNotConfiguredError,
@@ -18,6 +19,7 @@ from nomadata.core.interfaces.query_engine import QueryEngine
 from nomadata.core.interfaces.semantic_model import SemanticModel
 from nomadata.core.models import AgentTurn, AskRequest, BusinessContext, SemanticGraph
 from nomadata.core.registry import get_registry
+from nomadata.query.cube import QueryEngineError
 from nomadata.semantic.service import SemanticModelNotFoundError
 
 router = APIRouter(prefix="/datasources/{name}/ask", tags=["ask"])
@@ -73,5 +75,12 @@ async def ask(request: Request, name: str, body: AskRequest) -> AgentTurn:
     context = await _context(request, name)
     try:
         return await runtime.answer(question, graph, context=context)
+    except QueryValidationError as exc:
+        # The model named something the published model does not have, past the
+        # repair turns. That is a modelling gap, not a provider outage — calling
+        # it "the AI provider failed" sent everyone looking in the wrong place.
+        return AgentTurn(kind="error", question=question, reason=str(exc))
+    except QueryEngineError as exc:
+        return AgentTurn(kind="error", question=question, reason=str(exc))
     except Exception as exc:  # noqa: BLE001 - the LLM/provider round trip failed
         raise HTTPException(status_code=502, detail=f"The AI provider failed: {exc}") from exc

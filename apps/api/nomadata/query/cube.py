@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 import jwt
 
-from nomadata.agent.resolver import resolve
+from nomadata.agent.resolver import ResolvedQuery, resolve
 from nomadata.core.errors import NomaDataError
 from nomadata.core.interfaces.query_engine import QueryEngine
 from nomadata.core.models import (
@@ -145,7 +145,12 @@ class CubeQueryEngine(QueryEngine):
         # Business names in, Cube members out — and every name checked against
         # the published model before Cube ever sees it, so an unknown metric is
         # a sentence the caller can act on rather than "Member not found".
-        resolved = resolve(query, graph)
+        #
+        # A `ResolvedQuery` has been through this already; that is what the type
+        # is for. Resolving it a second time looks up Cube members as if they
+        # were business names and fails on every one — which turned every
+        # agent-answered question into a 502.
+        resolved = query if isinstance(query, ResolvedQuery) else resolve(query, graph)
         return ExecutionPlan(source_id=graph.source_id, representation=build_cube_query(resolved))
 
     async def run(self, query: AnalyticalQuery, graph: SemanticGraph) -> QueryResult:

@@ -457,6 +457,29 @@ class QueryPlan(BaseModel):
     clarification: str = ""
     reason: str = ""
 
+    @model_validator(mode="after")
+    def _payload_matches_kind(self) -> QueryPlan:
+        """Every kind has to carry the thing that kind is for.
+
+        A model that replies ``{"kind": "query"}`` and nothing else has decided
+        nothing. Accepting it turned a broken reply into a fabricated "could you
+        rephrase that?" — the user was asked to fix a question that was fine,
+        and the eval scored it as the agent sensibly clarifying. Rejecting it
+        here instead makes the provider retry with the error, and lets a real
+        failure be reported as one.
+        """
+        if self.kind not in ("query", "clarify", "refuse"):
+            raise ValueError('kind must be one of "query", "clarify", "refuse"')
+        if self.kind == "query" and self.query is None:
+            raise ValueError('kind is "query" but no `query` was given')
+        if self.kind == "query" and not self.query.measures:  # type: ignore[union-attr]
+            raise ValueError("a query has to name at least one metric in `measures`")
+        if self.kind == "clarify" and not self.clarification.strip():
+            raise ValueError('kind is "clarify" but no `clarification` question was given')
+        if self.kind == "refuse" and not self.reason.strip():
+            raise ValueError('kind is "refuse" but no `reason` was given')
+        return self
+
 
 class AgentTurn(BaseModel):
     """One answered (or declined) question — the /ask response and UI turn."""

@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, TypeVar, cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from nomadata.agent.catalog import model_card
 from nomadata.agent.runtime import AgentRuntime
@@ -236,8 +236,7 @@ def _many_metrics(count: int) -> SemanticGraph:
     graph = _graph()
     base = graph.metrics[0]
     extra = [
-        base.model_copy(update={"id": f"m{i}", "name": f"Chỉ số phụ {i}"})
-        for i in range(count)
+        base.model_copy(update={"id": f"m{i}", "name": f"Chỉ số phụ {i}"}) for i in range(count)
     ]
     return graph.model_copy(update={"metrics": [*graph.metrics, *extra]})
 
@@ -271,3 +270,37 @@ def test_an_untrimmed_card_says_nothing_about_trimming() -> None:
 def test_trimming_keeps_the_metrics_the_question_is_about() -> None:
     card = model_card(_many_metrics(60), question="học phí đã thu", max_metrics=3)
     assert "Học phí đã thu" in card
+
+
+# ----------------------------------------------------------------------
+# A plan has to carry what its kind promises
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"kind": "query"},  # decided to query, named no query
+        {"kind": "query", "query": {"measures": []}},  # a query measuring nothing
+        {"kind": "clarify"},  # asked back without a question
+        {"kind": "refuse"},  # declined without a reason
+        {"kind": "maybe", "clarification": "?"},  # not a kind at all
+    ],
+)
+def test_an_empty_plan_is_rejected(payload: dict[str, Any]) -> None:
+    """An empty reply used to reach the user as "could you rephrase that?" —
+    a question we wrote, blamed on the model, about a question that was fine.
+    Rejecting it here makes the provider retry and a real failure show as one."""
+    with pytest.raises(ValidationError):
+        QueryPlan.model_validate(payload)
+
+
+def test_a_complete_plan_still_validates() -> None:
+    assert (
+        QueryPlan.model_validate({"kind": "query", "query": {"measures": ["Doanh thu"]}}).kind
+        == "query"
+    )
+    assert QueryPlan.model_validate({"kind": "clarify", "clarification": "Which one?"}).kind == (
+        "clarify"
+    )
+    assert QueryPlan.model_validate({"kind": "refuse", "reason": "Not this data."}).kind == "refuse"
