@@ -532,6 +532,10 @@ class AgentStep(BaseModel):
     metric was looked up, which query ran, what a tool rejected.
     """
 
+    #: Position in the turn. A step is sent when it starts and again when it
+    #: finishes carrying what came back, so the reader watches it happen and
+    #: can still open it afterwards; the id is what joins the two.
+    ordinal: int = 0
     kind: str  # "plan" | "tool" | "result" | "repair"
     label: str
     detail: str = ""

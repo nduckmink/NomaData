@@ -330,14 +330,25 @@ def test_the_stream_reports_each_step_then_the_turn() -> None:
     assert kinds[-1] == "turn"
     assert kinds[:-1] == ["step"] * (len(kinds) - 1)
 
-    labels = [payload["label"] for name, payload in events if name == "step"]
+    steps = [payload for name, payload in events if name == "step"]
+    labels = {step["label"] for step in steps}
     assert "Reading the semantic model" in labels
     assert any(label.startswith("Running") for label in labels)
 
+    # A tool step is sent twice under one id: once when it starts, once with
+    # what it returned. The reader watches it happen and can still open it after.
+    running = [s for s in steps if s["label"].startswith("Running")]
+    assert len(running) == 2
+    assert running[0]["ordinal"] == running[1]["ordinal"]
+    assert running[0]["detail"] == ""
+    assert "1284500000" in running[1]["detail"]  # the rows it returned
+
     turn = events[-1][1]
     assert turn["kind"] == "answer"
-    # The same steps travel with the turn, so reopening the thread shows them.
-    assert [s["label"] for s in turn["steps"]] == labels
+    # The turn keeps one copy of each step, finished — that is what a reopened
+    # thread shows.
+    assert [s["ordinal"] for s in turn["steps"]] == [1, 2, 3]
+    assert [s["label"] for s in turn["steps"]] == [s["label"] for s in steps[:1] + steps[2:]]
 
 
 def test_a_failure_arrives_as_an_event_not_a_cut_stream() -> None:

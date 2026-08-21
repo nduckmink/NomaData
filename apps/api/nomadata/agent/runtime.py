@@ -56,6 +56,10 @@ _MAX_REPAIRS = 2
 #: Enough for look-up, correct a rejected name, run — and no room to wander.
 _MAX_TOOL_TURNS = 4
 
+#: How much of a tool's output travels with its step. Enough to read the rows
+#: that were returned, not enough to store the whole result twice.
+_MAX_STEP_DETAIL = 4000
+
 _SYSTEM = (
     "You are a careful analytics assistant. Turn the user's question into ONE "
     "query against the semantic model given below.\n"
@@ -219,8 +223,11 @@ class AgentRuntime:
             )
             for call in response.tool_calls:
                 usage.tool_calls += 1
-                await steps.add("tool", _tool_label(call.name, call.arguments))
+                step = await steps.add("tool", _tool_label(call.name, call.arguments))
                 output = await box.run(call.name, call.arguments)
+                # What the tool returned, beside what it was asked. Reading the
+                # query without the rows it produced is half the account.
+                await steps.finish(step, output[:_MAX_STEP_DETAIL])
                 messages.append(
                     Message(role=Role.tool, content=output, tool_call_id=call.id, name=call.name)
                 )
@@ -385,9 +392,16 @@ class _Steps:
         self.taken: list[AgentStep] = []
         self._sink = sink
 
-    async def add(self, kind: str, label: str, detail: str = "") -> None:
-        step = AgentStep(kind=kind, label=label, detail=detail)
+    async def add(self, kind: str, label: str, detail: str = "") -> AgentStep:
+        step = AgentStep(ordinal=len(self.taken) + 1, kind=kind, label=label, detail=detail)
         self.taken.append(step)
+        if self._sink is not None:
+            await self._sink(step)
+        return step
+
+    async def finish(self, step: AgentStep, detail: str) -> None:
+        """Attach what a step produced, and send it again under the same id."""
+        step.detail = detail
         if self._sink is not None:
             await self._sink(step)
 

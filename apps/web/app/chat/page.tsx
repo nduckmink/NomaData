@@ -178,7 +178,11 @@ export default function ChatPage() {
         question,
         conversationId,
         (step) => {
-          seen.push(step)
+          // A tool step comes twice under one ordinal: starting, then with what
+          // it returned. Replace rather than append, or the trail doubles.
+          const at = seen.findIndex((s) => s.ordinal === step.ordinal)
+          if (at === -1) seen.push(step)
+          else seen[at] = step
           setExchanges((xs) =>
             _replaceLast(xs, {
               question,
@@ -450,15 +454,40 @@ function StepTrail({
       <ChainOfThoughtContent>
         {steps.map((step, i) => (
           <ChainOfThoughtStep
-            key={i}
+            key={step.ordinal}
             label={step.label}
-            description={step.detail || undefined}
             status={running && i === steps.length - 1 ? "active" : "complete"}
-          />
+          >
+            {step.detail && <StepDetail detail={step.detail} />}
+          </ChainOfThoughtStep>
         ))}
       </ChainOfThoughtContent>
     </ChainOfThought>
   )
+}
+
+/** What a step returned, folded away. Reading the query without the rows it
+ *  produced is half the account of how a number was reached. */
+function StepDetail({ detail }: { detail: string }) {
+  return (
+    <details className="text-xs text-muted-foreground">
+      <summary className="cursor-pointer select-none hover:text-foreground">
+        Output
+      </summary>
+      <pre className="mt-1 max-h-64 overflow-auto rounded-none border bg-wash p-2 font-mono text-[11px] whitespace-pre-wrap">
+        {prettyJson(detail)}
+      </pre>
+    </details>
+  )
+}
+
+/** Tool output is JSON when it worked and a sentence when it did not. */
+function prettyJson(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return text
+  }
 }
 
 function TurnView({

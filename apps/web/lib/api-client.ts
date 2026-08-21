@@ -837,6 +837,10 @@ export interface TurnUsage {
 
 /** One thing the agent did on the way to an answer. */
 export interface AgentStep {
+  /** Position in the turn. A tool step arrives twice under one ordinal — once
+   *  when it starts, once carrying what it returned — so a live step can be
+   *  replaced rather than appended. */
+  ordinal: number
   kind: "plan" | "tool" | "result" | "repair"
   label: string
   detail: string
