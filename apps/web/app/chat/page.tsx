@@ -6,8 +6,6 @@ import {
   RiChat3Line,
   RiErrorWarningLine,
   RiForbid2Line,
-  RiLoader4Line,
-  RiSendPlane2Line,
 } from "@remixicon/react"
 import { toast } from "sonner"
 
@@ -29,6 +27,17 @@ import {
   ConversationContent,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation"
+import { Loader } from "@/components/ai-elements/loader"
+import { Message, MessageContent } from "@/components/ai-elements/message"
+import {
+  PromptInput,
+  PromptInputBody,
+  type PromptInputMessage,
+  PromptInputFooter,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+} from "@/components/ai-elements/prompt-input"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -48,7 +57,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Textarea } from "@/components/ui/textarea"
 import { PageContainer } from "@/components/page-header"
 import { cn } from "@/lib/utils"
 import { ConversationList } from "@/app/chat/conversation-list"
@@ -95,7 +103,6 @@ export default function ChatPage() {
   const [source, setSource] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [exchanges, setExchanges] = useState<Exchange[]>([])
-  const [input, setInput] = useState("")
   const [asking, setAsking] = useState(false)
   // The thread this page is adding to. Null until the first question — the API
   // starts one and hands the id back, so nothing has to be created up front.
@@ -155,7 +162,6 @@ export default function ChatPage() {
   async function send(raw: string) {
     const question = raw.trim()
     if (!question || !source || asking) return
-    setInput("")
     setAsking(true)
     setExchanges((xs) => [...xs, { question, status: "pending" }])
     try {
@@ -279,7 +285,9 @@ export default function ChatPage() {
           </div>
 
           <ConversationView className="min-h-0 flex-1">
-            <ConversationContent className="space-y-6">
+            {/* Messages keep a reading column even though the page is full
+                width: a table wants the room, a sentence does not. */}
+            <ConversationContent className="mx-auto w-full max-w-4xl gap-6">
               {exchanges.length === 0 && (
                 <div className="flex flex-col items-center gap-2 pt-10 text-center">
                   <p className="text-sm text-muted-foreground">
@@ -298,37 +306,34 @@ export default function ChatPage() {
             <ConversationScrollButton />
           </ConversationView>
 
-          <div className="border-t p-3">
-            <div className="flex items-end gap-2">
-              <Textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault()
-                    void send(input)
+          <div className="mx-auto w-full max-w-4xl shrink-0 px-4 pb-4">
+            <PromptInput
+              onSubmit={(message: PromptInputMessage) =>
+                void send(message.text)
+              }
+            >
+              <PromptInputBody>
+                <PromptInputTextarea
+                  placeholder={
+                    exchanges.length > 0
+                      ? "Ask a follow-up…"
+                      : `Ask ${source} in plain language…`
                   }
-                }}
-                placeholder={
-                  exchanges.length > 0 ? "Ask a follow-up…" : `Ask ${source}…`
-                }
-                rows={1}
-                className="max-h-40 min-h-9 flex-1 resize-none"
-                disabled={asking}
-              />
-              <Button
-                onClick={() => void send(input)}
-                disabled={asking || !input.trim()}
-                size="icon"
-                aria-label="Send"
-              >
-                {asking ? (
-                  <RiLoader4Line className="animate-spin" />
-                ) : (
-                  <RiSendPlane2Line />
-                )}
-              </Button>
-            </div>
+                  disabled={asking}
+                />
+                <PromptInputFooter>
+                  <PromptInputTools>
+                    <span className="px-1 text-xs text-muted-foreground">
+                      Enter to send · Shift+Enter for a new line
+                    </span>
+                  </PromptInputTools>
+                  <PromptInputSubmit
+                    disabled={asking}
+                    status={asking ? "submitted" : undefined}
+                  />
+                </PromptInputFooter>
+              </PromptInputBody>
+            </PromptInput>
           </div>
         </div>
       </div>
@@ -350,29 +355,33 @@ function ExchangeView({
   liveVersion: number | null
 }) {
   return (
-    <div className="flex flex-col gap-2">
-      <div className="self-end rounded-lg bg-accent-brand/10 px-3 py-2 text-sm">
-        {exchange.question}
-      </div>
+    <div className="flex flex-col gap-4">
+      <Message from="user">
+        <MessageContent>{exchange.question}</MessageContent>
+      </Message>
 
-      {exchange.status === "pending" && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <RiLoader4Line className="size-4 animate-spin" />
-          Reading the model, planning the query…
-        </div>
-      )}
+      <Message from="assistant">
+        <MessageContent className="w-full">
+          {exchange.status === "pending" && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader size={16} />
+              Reading the model, planning the query…
+            </div>
+          )}
 
-      {exchange.status === "failed" && (
-        <Alert variant="destructive">
-          <RiErrorWarningLine />
-          <AlertTitle>Couldn&apos;t answer</AlertTitle>
-          <AlertDescription>{exchange.error}</AlertDescription>
-        </Alert>
-      )}
+          {exchange.status === "failed" && (
+            <Alert variant="destructive">
+              <RiErrorWarningLine />
+              <AlertTitle>Couldn&apos;t answer</AlertTitle>
+              <AlertDescription>{exchange.error}</AlertDescription>
+            </Alert>
+          )}
 
-      {exchange.status === "done" && exchange.turn && (
-        <TurnView turn={exchange.turn} liveVersion={liveVersion} />
-      )}
+          {exchange.status === "done" && exchange.turn && (
+            <TurnView turn={exchange.turn} liveVersion={liveVersion} />
+          )}
+        </MessageContent>
+      </Message>
     </div>
   )
 }
@@ -426,7 +435,7 @@ function TurnView({
     result != null && result.rows.length === 1 && result.columns.length === 1
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border p-3">
+    <div className="flex w-full flex-col gap-3">
       {scalar && result ? (
         <div className="text-2xl font-semibold tracking-tight tnum">
           {formatValue(result.rows[0][result.columns[0].name])}

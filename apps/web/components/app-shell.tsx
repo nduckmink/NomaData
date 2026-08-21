@@ -38,8 +38,8 @@ type NavItem = {
 // Semantic Models = the cross-source model overview.
 const NAV: NavItem[] = [
   // Ask is the product; the rest configure what it answers from.
-  { href: "/chat", label: "Chat", icon: RiChat3Line },
   { href: "/", label: "Overview", icon: RiDashboardLine },
+  { href: "/chat", label: "Chat", icon: RiChat3Line },
   { href: "/schema", label: "Data Source", icon: RiDatabase2Line },
   { href: "/semantic", label: "Semantic Models", icon: RiNodeTree },
 ]

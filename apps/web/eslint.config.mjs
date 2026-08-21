@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Vendored, not authored here: shadcn and AI Elements components are
+    // copied in by their CLI and re-copied on update. Linting them means
+    // either editing upstream code we want to keep re-pullable, or living
+    // with permanent errors that hide our own.
+    "components/ai-elements/**",
   ]),
 ]);
 
