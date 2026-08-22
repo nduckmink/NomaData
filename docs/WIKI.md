@@ -17,8 +17,8 @@
 | **Metric** | a number worth tracking | *measure what* |
 | **Relationship** | how two entities join | *what can be cut by what* |
 
-These multiply. Sixteen real metrics, a few dozen dimensions and fourteen time
-ranges answer thousands of questions without anybody defining one of them:
+These multiply. Eighty designed metrics, a few dozen dimensions and fourteen
+time ranges answer thousands of questions without anybody defining one of them:
 
 ```
 metrics × dimensions × time ranges × filters
@@ -147,16 +147,47 @@ anything the list does not.
 ## 5. How a model gets built
 
 ```
-① inspect schema      tables, columns, keys, foreign keys
-② profile columns     one query per candidate column: distinct count, samples
-③ heuristic           tables → entities, columns → dimensions, FKs → relationships
-④ AI naming           business names, and: is this table worth measuring at all
-⑤ AI metrics          for the tables ④ said are worth measuring
-⑤b AI ratios          over the base metrics ⑤ just created
-⑥ save as draft       a human reviews, edits, publishes
+① inspect schema       tables, columns, keys, foreign keys
+② profile columns      one query per candidate column: distinct count, samples
+③ heuristic            tables → entities, columns → dimensions, FKs → relationships
+④ AI naming            business names, and: is this table worth measuring at all
+   ↳ unique names       two batches can land on one name; a machine settles it
+⑤ AI metrics           for the tables ④ said are worth measuring
+   ↳ unique names
+⑤b AI ratios           over the base metrics ⑤ just created
+   ↳ unique names
+⑥ save as draft        a human reviews, edits, publishes
 ```
 
-Settled decisions in that pipeline:
+The shape matters as much as the steps. **AI is asked for judgement; machines
+enforce invariants.** Naming a table, deciding whether anyone measures it,
+choosing which ratio is worth having — those need to know what the business is,
+and no rule can do them. Uniqueness, closure of a formula, whether an
+aggregation has a column — those are certainties, and asking a model for them
+gets an answer that is right most of the time, which is the worst kind.
+
+The whole pipeline is a **fixed queue**: one unit of work per table, decided
+before the first call. The AI cannot add to it. That is what makes the build
+terminate, and what makes it cover every table rather than the ones it found
+interesting.
+
+### What this produced
+
+On a 122-table MySQL source, before and after this shape:
+
+| | Before | After |
+| --- | --- | --- |
+| Metrics | 138 | 122 |
+| Ratios (derived) | **0** | **39** |
+| Duplicate names | 1 metric, 2 entities | 0 |
+| Errors blocking publish | 3 | 0 |
+| Metrics the chat can actually run | 138, nearly all row counts | 122, ratios included |
+
+That last row is the one to watch. A metric Cube cannot compile is not an error
+anywhere — it sits in the model and vanishes at compile time, so "138 metrics"
+and "138 metrics the agent can use" were different numbers and nothing said so.
+
+### Settled decisions
 
 **No cap on profiling.** It was 400 columns, taken in catalogue order — which is
 alphabetical by table, so a 122-table source spent the whole budget on
@@ -165,7 +196,9 @@ time budget replaced it and was the same mistake in a different unit. A build
 runs once, deliberately, with a progress bar; what it produces is used until
 somebody rebuilds. Stopping early buys minutes once and costs a model that never
 learns what its own columns hold. The per-column timeout is the guard that
-belongs here — one pathological column is skipped, the rest are not.
+belongs here — one pathological column is skipped, the rest are not. Columns are
+interleaved by table, so running out of time costs every table its rarest
+columns instead of costing some tables all of them.
 
 **The heuristic does not give every table a row count.** Counting rows is
 mechanical; whether a count of `department_roles` is a number anyone asks for is
@@ -179,6 +212,28 @@ batch, or a model that omits the field, leaves the count alone.
 from a decision about the business rather than a number we chose, so capping it
 again would put the arbitrary limit straight back.
 
+**Ratios are their own pass, and it has to come second.** When the first pass
+looks at a table, all it has is a row count — there is nothing to divide. So
+base metrics are proposed from an entity's *columns*, and ratios afterwards from
+its *metrics*, for entities that ended up with at least two. Every proposal is
+checked against that entity's own metric names, whichever pass produced it: an
+unchecked formula naming a metric from another table compiles to nothing and
+ships as a metric that is simply absent.
+
+**Names are made unique by machine, after the AI has spoken.** The naming pass
+runs in parallel batches, so the batch naming `contracts` cannot know what the
+batch naming `enterprise_contracts` chose — and "Hợp đồng doanh nghiệp" is a
+reasonable name for either. No prompt fixes that; seeing the whole model at once
+is exactly what batching gives up. Collisions are broken by the **table**, which
+is unique by construction. Breaking them by the entity name looks equivalent and
+is not: the entity name can be the duplicate, which is how the first attempt at
+this disambiguated nothing.
+
+This is not cosmetic. Every entity gets a `<Entity> Count`, so two entities with
+one name make two metrics with one name — and a formula naming that metric
+resolves to whichever the compiler saw last, which drops two sound ratios and
+reports them as spanning two tables.
+
 **Values are read when needed, not profiled in advance — for the agent.** The
 model says a column is called `Status`; it does not say whether its rows read
 `COMPLETED`, `completed` or `3`. Filtering on the wrong one returns nothing,
@@ -186,6 +241,22 @@ which reads exactly like a real answer of zero. `values_of` asks at question
 time, cached for an hour, and scales with the question rather than with the
 database. Build-time profiling still serves the editor's filter picker and the
 naming pass.
+
+### One reading of a formula
+
+`core/formula.py` is the only place that decides what a formula refers to, and
+the validator, the Cube compiler and the suggester's guard all use it.
+
+They used to have three. The compiler matched names as substrings; the validator
+tokenised on characters and split a name at a bracket, calling half of it an
+unknown metric. The same model was publishable or broken depending on which code
+path you ran, and which you believed was luck. Two definitions of "valid" for
+one language is a bug waiting on a name with punctuation in it — and the name
+that triggered it was one this pipeline generated itself.
+
+Substring matching, longest name first, is the definition. It does not care what
+characters a business name contains, which is the point: a business name is a
+business name, not an identifier.
 
 ---
 
