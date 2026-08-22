@@ -31,7 +31,11 @@ import {
   ChainOfThoughtStep,
 } from "@/components/ai-elements/chain-of-thought"
 import { Loader } from "@/components/ai-elements/loader"
-import { Message, MessageContent } from "@/components/ai-elements/message"
+import {
+  Message,
+  MessageContent,
+  MessageResponse,
+} from "@/components/ai-elements/message"
 import {
   PromptInput,
   type PromptInputMessage,
@@ -510,7 +514,10 @@ function TurnView({
     const text = turn.clarification || turn.reason || turn.answer
     return (
       <div className="flex flex-col gap-1.5">
-        <p className="text-sm whitespace-pre-wrap">{text}</p>
+        {/* Rendered as markdown: the model writes **bold** and lists whether or
+            not we asked, and showing the asterisks makes the assistant look
+            like it is malfunctioning. */}
+        <MessageResponse className="text-sm">{text}</MessageResponse>
         <CostLine usage={turn.usage} />
       </div>
     )

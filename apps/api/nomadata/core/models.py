@@ -339,7 +339,11 @@ class TimeSpec(BaseModel):
     history, which is a legitimate thing to ask for.
     """
 
-    dimension: str
+    #: Blank means the date the metric itself declares, which is what almost
+    #: every question wants. It was required, and a caller that left it out —
+    #: exactly as the tool description invites — got "field required" back
+    #: twice and then gave up.
+    dimension: str = ""
     #: A keyword from RELATIVE_RANGES.
     range: str | None = None
     #: An exact window, inclusive at both ends. Wins over `range` if both given.

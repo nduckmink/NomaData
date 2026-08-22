@@ -253,6 +253,21 @@ class AgentRuntime:
                     await steps.add("repair", "Correcting a rejected name", output[:200])
 
             if box.ended is not None:
+                # A turn that tried to measure something and could not must not
+                # end with the model saying a number anyway. It did: two failed
+                # attempts, then `reply` with "là 0 VNĐ" — a figure no query
+                # ever produced. The guarantee that a headline is computed
+                # rather than narrated only ever covered the answer branch;
+                # this is the branch it escaped through.
+                if box.query_error is not None:
+                    await steps.add("result", "Could not run the query")
+                    return AgentTurn(
+                        kind="error",
+                        question=question,
+                        reason=box.query_error,
+                        usage=usage,
+                    )
+
                 # The model said which it was by choosing the tool, so there is
                 # nothing left to classify — and no second LLM call to pay for.
                 kind, text = box.ended

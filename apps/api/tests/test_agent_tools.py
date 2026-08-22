@@ -493,3 +493,39 @@ async def test_a_reply_full_of_tool_calls_is_stopped() -> None:
 
     assert turn.kind == "error"
     assert turn.usage.tool_calls == 12
+
+
+@pytest.mark.asyncio
+async def test_a_failed_query_cannot_be_answered_in_prose() -> None:
+    """It happened: two rejected attempts, then `reply` with "là 0 VNĐ" — a
+    figure no query ever produced. The guarantee that a headline is computed
+    rather than narrated only covered the answer branch, and this is the branch
+    it escaped through."""
+    provider = ScriptedProvider(
+        [
+            _call("run_query", measures=["Không có thật"]),
+            _call("reply", text="Tổng là **0** VNĐ."),
+        ]
+    )
+
+    turn = await AgentRuntime(provider, FakeEngine()).answer("tổng bao nhiêu", _graph())
+
+    assert turn.kind == "error"
+    assert "No metric called" in turn.reason
+    assert "0" not in turn.answer
+
+
+@pytest.mark.asyncio
+async def test_a_query_that_succeeds_after_a_failure_still_answers() -> None:
+    """Correcting a rejected name is the loop working, not a turn to abandon."""
+    provider = ScriptedProvider(
+        [
+            _call("run_query", measures=["Không có thật"]),
+            _call("run_query", measures=["Học phí đã thu"]),
+        ]
+    )
+
+    turn = await AgentRuntime(provider, FakeEngine()).answer("học phí", _graph())
+
+    assert turn.kind == "answer"
+    assert turn.answer == "1284500000"

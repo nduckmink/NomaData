@@ -283,6 +283,10 @@ class ToolBox:
         #: Set when the model ends the turn without an answer. Its own words,
         #: with its own label — no second call to ask what it meant.
         self.ended: tuple[str, str] | None = None
+        #: Why the last attempt to run a query failed. A turn that tried to
+        #: measure something and could not must not end with the model saying a
+        #: number anyway, and this is how the runtime knows that happened.
+        self.query_error: str | None = None
 
     async def run(self, name: str, arguments: dict[str, Any]) -> str:
         """Execute a tool call and return what the model should read back.
@@ -319,8 +323,12 @@ class ToolBox:
             if name == "run_query":
                 return await self._run_query(arguments)
         except QueryValidationError as exc:
+            if name == "run_query":
+                self.query_error = str(exc)
             return f"That did not work: {exc}"
         except Exception as exc:  # noqa: BLE001 - the model reads this and retries
+            if name == "run_query":
+                self.query_error = str(exc)
             return f"That did not work: {exc}"
         return (
             f"There is no tool called {name!r}. Available: "
@@ -451,6 +459,7 @@ class ToolBox:
         resolved = resolve(query, self._graph)
         result = await self._engine.run(resolved, self._graph)
 
+        self.query_error = None
         self.last_query = query
         self.last_result = result
         self.last_notes = resolved.notes
