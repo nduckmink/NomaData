@@ -293,6 +293,11 @@ export interface MasterItem {
   key: string
   title: string
   subtitle?: string
+  /** What kind of thing this is, when the list holds more than one kind.
+   *  Measured-from-data and calculated-from-other-metrics behave completely
+   *  differently, and the list gave no way to tell them apart without opening
+   *  each one. */
+  badge?: string
   /** Still has a field nobody has filled in. */
   empty: boolean
   /** Changed since the last save. */
@@ -361,6 +366,11 @@ export function MasterList({
                 >
                   {it.title}
                 </span>
+                {it.badge && (
+                  <span className="ml-auto shrink-0 rounded-sm border border-border/60 px-1 text-[10px] text-muted-foreground">
+                    {it.badge}
+                  </span>
+                )}
                 {it.isNew && (
                   <span className="shrink-0 rounded-sm bg-accent-brand/15 px-1 text-[10px] text-accent-brand">
                     new
@@ -402,7 +412,10 @@ export function MasterDetail({
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         {header}
       </div>
-      <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[minmax(0,17rem)_1fr]">
+      {/* 4/6 rather than a fixed 17rem: the list carries a name, what the
+          thing is built from, and its state, and 17rem truncated the name
+          before any of that could be read. */}
+      <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[minmax(0,4fr)_minmax(0,6fr)]">
         {list}
         <div className="min-h-0 overflow-y-auto">
           <div className="flex max-w-2xl flex-col gap-4 pr-1 pb-4">

@@ -774,6 +774,8 @@ export function SemanticPanel({ source }: { source: string }) {
                   key: m.id,
                   title: m.name || "(unnamed metric)",
                   subtitle: recipeSummary(m, graph.entities),
+                  // Which of the two kinds it is, without opening it.
+                  badge: m.kind === "derived" ? "calculated" : "measured",
                   empty: metricIncomplete(m),
                   dirty: changes.metrics.get(m.id) === "edited",
                   isNew: changes.metrics.get(m.id) === "new",
