@@ -10,8 +10,6 @@ so only in a log line.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from nomadata.core.models import (
@@ -119,16 +117,29 @@ async def test_a_column_that_cannot_be_profiled_is_skipped_not_fatal() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_budget_stops_the_run(monkeypatch: Any) -> None:
-    """Bounded by time rather than by a column count: a count is a guess about
-    somebody else's database and the next one would be wrong again."""
-    monkeypatch.setattr("nomadata.semantic.jobs._PROFILE_BUDGET_S", -1.0)
+async def test_nothing_is_left_unprofiled_for_being_late() -> None:
+    """A build runs once and its model is used until somebody rebuilds. Stopping
+    early trades a few minutes now against a model that never learns what its
+    own columns hold — so there is no global ceiling, only the per-column
+    timeout that skips one pathological column and keeps the rest."""
     job = GenerationJob(id="j", source_id="scp")
-    catalog = _catalog({"transactions": 3})
+    catalog = _catalog({f"t{i}": 20 for i in range(40)})
     source = _Source()
 
     profiles = await profile_dimension_candidates(source, catalog, None, job)  # type: ignore[arg-type]
 
-    assert profiles == {}
-    assert source.asked == []
+    assert len(profiles) == 800
+    assert job.profile_total == 800
+    assert job.unprofiled_columns == 0
+
+
+@pytest.mark.asyncio
+async def test_a_failure_is_counted_so_the_gap_is_visible() -> None:
+    job = GenerationJob(id="j", source_id="scp")
+    catalog = _catalog({"transactions": 2, "broken": 3})
+
+    await profile_dimension_candidates(_Source(fail={"broken"}), catalog, None, job)  # type: ignore[arg-type]
+
+    assert job.profile_total == 5
+    assert job.profiled_columns == 2
     assert job.unprofiled_columns == 3

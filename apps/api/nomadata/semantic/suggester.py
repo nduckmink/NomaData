@@ -361,7 +361,15 @@ class SemanticSuggester:
                     "write a business Name and a one-sentence Definition of what "
                     "it measures. Return ONLY JSON. Echo every entity `key` and "
                     "metric `id` back EXACTLY as given so they can be matched. "
-                    "Do not invent items, tables or columns." + context_rules(context)
+                    "Do not invent items, tables or columns.\n"
+                    "Also set `measurable` on each entity: true when a person "
+                    "running this business would ask how many of these there "
+                    "are or what they add up to — orders, payments, customers, "
+                    "advances. False for the rest: lookup and category tables, "
+                    "join tables, permission and configuration tables, audit "
+                    "logs. Most tables in a large database are false. Be strict: "
+                    "a metric nobody asks for still has to be read past every "
+                    "time somebody looks for one that matters." + context_rules(context)
                 ),
             ),
             Message(
@@ -369,7 +377,7 @@ class SemanticSuggester:
                 content=(
                     f"Entities with their columns and metrics:\n"
                     f"{_json(payload)}\n\n"
-                    'Return {"entities":[{"key","name","description"}],'
+                    'Return {"entities":[{"key","name","description","measurable"}],'
                     '"metrics":[{"id","name","definition"}]}.'
                 ),
             ),
@@ -470,8 +478,21 @@ class SemanticSuggester:
         renamed = {e.key: e.name for e in entities}
         previous_names = {e.key: e.name for e in graph.entities}
 
+        # Tables nobody measures keep their columns — they are still worth
+        # slicing by — but lose the row count the heuristic gave every table on
+        # principle. 122 of those buried the 16 metrics anyone had designed, and
+        # every one of them was a name the agent had to read past. A table the
+        # model never judged keeps its count: silence is not a no.
+        unmeasured = {hint.key for hint in ent_hints.values() if not hint.measurable}
+
         metrics: list[MetricDefinition] = []
         for metric in graph.metrics:
+            if (
+                _is_plain_count(metric)
+                and metric.entity_key in unmeasured
+                and _writable(metric.provenance)
+            ):
+                continue
             metric_hint = met_hints.get(metric.id)
             if _writable(metric.provenance):
                 update = {}

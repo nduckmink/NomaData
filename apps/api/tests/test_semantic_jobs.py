@@ -77,29 +77,41 @@ def _entity_with(key: str, table: str, dims: list[tuple[str, str]]) -> Entity:
     )
 
 
-def test_fact_entities_needs_a_date_and_a_real_number() -> None:
-    from nomadata.semantic.jobs import _fact_entities
-
-    fact = _entity_with(
-        "a.transactions",
-        "transactions",
-        [("paid_at", "time"), ("amount", "number"), ("status", "string")],
-    )
-    lookup = _entity_with("a.banks", "banks", [("name", "string")])
-    # A junction table: a date but no measurable number (only foreign keys).
-    junction = _entity_with(
-        "a.role_user", "role_user", [("created_at", "time"), ("role_id", "number")]
-    )
-
-    graph = SemanticGraph(source_id="s", entities=[fact, lookup, junction])
-    picked = {e.key for e in _fact_entities(graph)}
-
-    assert picked == {"a.transactions"}
-
-
-def test_fact_entities_skips_a_table_that_already_has_real_metrics() -> None:
+def test_the_scope_is_the_tables_the_naming_pass_kept_a_count_on() -> None:
+    """Structure cannot tell a table anyone measures from one nobody does: the
+    old rule called 95 of 122 tables facts, permission tables included. The
+    naming pass answers it table by table and records the answer by leaving the
+    row count in place or removing it, so the count is the scope."""
     from nomadata.core.models import Aggregation, MetricKind
-    from nomadata.semantic.jobs import _fact_entities
+    from nomadata.semantic.jobs import _measurable_entities
+
+    measured = _entity_with(
+        "a.transactions", "transactions", [("paid_at", "time"), ("amount", "number")]
+    )
+    # Structurally identical, but the naming pass took its count away.
+    unmeasured = _entity_with(
+        "a.role_user", "role_user", [("created_at", "time"), ("weight", "number")]
+    )
+
+    graph = SemanticGraph(
+        source_id="s",
+        entities=[measured, unmeasured],
+        metrics=[
+            MetricDefinition(
+                name="Transactions Count",
+                kind=MetricKind.base,
+                entity_key="a.transactions",
+                aggregation=Aggregation.count,
+            )
+        ],
+    )
+
+    assert {e.key for e in _measurable_entities(graph)} == {"a.transactions"}
+
+
+def test_a_table_that_already_has_real_metrics_needs_no_proposals() -> None:
+    from nomadata.core.models import Aggregation, MetricKind
+    from nomadata.semantic.jobs import _measurable_entities
 
     fact = _entity_with(
         "a.transactions",
@@ -120,4 +132,4 @@ def test_fact_entities_skips_a_table_that_already_has_real_metrics() -> None:
         ],
     )
 
-    assert _fact_entities(graph) == []
+    assert _measurable_entities(graph) == []

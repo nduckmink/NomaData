@@ -540,6 +540,56 @@ _SUGGEST_SYSTEM = (
 )
 
 
+def _referenced_names(expression: str, known: set[str]) -> set[str]:
+    """Which of ``known`` a formula mentions, longest first.
+
+    Longest first so ``Doanh thu`` does not match inside ``Doanh thu thuần`` and
+    leave a fragment behind that then resolves to nothing.
+    """
+    found: set[str] = set()
+    remaining = expression
+    for candidate in sorted(known, key=len, reverse=True):
+        if candidate and candidate in remaining:
+            found.add(candidate)
+            remaining = remaining.replace(candidate, " ")
+    return found
+
+
+def _expression_is_closed(expression: str, known: set[str]) -> bool:
+    """True when a formula holds nothing but the metrics it may name and
+    arithmetic. A leftover word is a metric this entity does not have; Cube
+    compiles that to nothing, so it would ship as a metric that is simply
+    absent from the model rather than as an error anybody sees."""
+    remaining = expression
+    for candidate in sorted(known, key=len, reverse=True):
+        if candidate:
+            remaining = remaining.replace(candidate, " ")
+    return not set(remaining.strip()) - set("+-*/(). 0123456789")
+
+
+_DERIVE_SYSTEM = (
+    "You propose RATIO metrics: numbers made by dividing or combining metrics "
+    "that already exist on one entity.\n"
+    "This is the half of a semantic model that base metrics cannot express, and "
+    "the half a business steers by. A total says how much happened; a ratio says "
+    "whether it is going well — recovery rate, fee as a share of volume, average "
+    "value per transaction, approval rate.\n"
+    "Rules you must follow:\n"
+    "  - kind is always 'derived', and `expression` uses ONLY the metric names "
+    "listed, joined by + - * / and parentheses. No columns, no invented names, "
+    "no numbers of your own beyond a factor like 100 for a percentage.\n"
+    "  - Spell every name in the expression exactly as it is listed.\n"
+    "  - Combine only comparable things. Money over a row count is an average "
+    "and is useful; money over a sum of days is nothing.\n"
+    "  - Set `format` to 'percent' for a share, and leave it empty otherwise.\n"
+    "  - Two or three good ones beat a list. If nothing here divides "
+    "meaningfully, return an empty list.\n"
+    "  - Each needs a business name, a one-sentence description, and "
+    "`reasoning` saying what decision it informs.\n"
+    "Return ONLY a JSON object."
+)
+
+
 class MetricSuggester:
     """Propose metrics for one entity.
 
@@ -555,6 +605,94 @@ class MetricSuggester:
     def __init__(self, provider: AIProvider) -> None:
         self._provider = provider
         self._drafter = MetricDrafter(provider)
+
+    async def suggest_derived(
+        self,
+        entity_key: str,
+        graph: SemanticGraph,
+        *,
+        context: BusinessContext | None = None,
+        limit: int = 3,
+    ) -> MetricSuggestResponse:
+        """Propose ratios over the base metrics an entity already has.
+
+        A pass of its own because it can only run once base metrics exist: when
+        the first pass looks at a table all it has is a row count, and there is
+        nothing to divide. Scoped to one entity because Cube builds a calculated
+        measure inside a single cube — a formula whose parts sit on two tables
+        compiles to nothing at all and is dropped without a word.
+        """
+        entity = next((e for e in graph.entities if e.key == entity_key), None)
+        if entity is None:
+            raise ValueError(f"No entity {entity_key!r} in this model.")
+
+        base = [
+            m
+            for m in graph.metrics
+            if m.entity_key == entity_key and m.kind == MetricKind.base and m.name.strip()
+        ]
+        if len(base) < 2:
+            return MetricSuggestResponse(metrics=[], reasons=[], warnings=[])
+
+        existing = [m for m in graph.metrics if m.entity_key == entity_key]
+        available = json.dumps(
+            [{"name": m.name, "means": m.description or ""} for m in base],
+            ensure_ascii=False,
+        )
+        already = json.dumps([_recipe(m) for m in existing], ensure_ascii=False, default=str)
+        proposals = await self._provider.generate_structured(
+            [
+                Message(role=Role.system, content=_DERIVE_SYSTEM + context_rules(context)),
+                Message(
+                    role=Role.user,
+                    content="\n\n".join(
+                        [
+                            f"Entity: {entity.name}",
+                            "Metrics available to combine (use these names exactly):\n" + available,
+                            "Already defined, do not repeat: " + already,
+                            f"Propose at most {limit} ratio metrics.",
+                        ]
+                    ),
+                ),
+            ],
+            MetricProposalList,
+        )
+
+        metrics: list[MetricDefinition] = []
+        reasons: list[str] = []
+        warnings: list[str] = []
+        seen = {_recipe(m) for m in existing}
+        known = {m.name for m in base}
+
+        for raw in proposals.metrics[:limit]:
+            proposal = raw.model_copy(update={"kind": "derived", "entity_key": entity_key})
+            drafted = self._drafter.materialize(
+                proposal,
+                MetricDraftRequest(prompt="", entity_key=entity_key),
+                graph,
+                [entity],
+            )
+            metric = drafted.metric
+            expression = (metric.expression or "").strip()
+            if not metric.name.strip() or not expression:
+                warnings.append("Skipped a ratio with no name or no expression.")
+                continue
+            if len(_referenced_names(expression, known)) < 2 or not _expression_is_closed(
+                expression, known
+            ):
+                warnings.append(
+                    f"Skipped {metric.name!r}: its formula names something this entity "
+                    "does not have, or combines nothing."
+                )
+                continue
+            recipe = _recipe(metric)
+            if recipe in seen:
+                continue
+            seen.add(recipe)
+            metrics.append(metric)
+            reasons.append(drafted.reasoning or raw.reasoning.strip())
+
+        return MetricSuggestResponse(metrics=metrics, reasons=reasons, warnings=warnings)
 
     async def suggest(
         self,

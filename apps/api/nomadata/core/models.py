@@ -1004,6 +1004,14 @@ class EntityHint(BaseModel):
     key: str
     name: str = ""
     description: str = ""
+    #: Whether anyone would ever measure this table. The heuristic gives every
+    #: table a row count because counting rows is mechanical; whether a count of
+    #: `department_roles` is a number a person would ask for is a judgement no
+    #: rule can make, and 122 of them buried the 16 that mattered. Asked here
+    #: because this pass already visits every entity, so the answer costs
+    #: nothing. Defaults to True: a model that omits the field must not be read
+    #: as saying no.
+    measurable: bool = True
 
 
 class MetricHint(BaseModel):
@@ -1040,11 +1048,13 @@ class GenerationJob(BaseModel):
     # their heuristic names — but "partly named" must not read as "named".
     failed_batches: int = 0
     last_batch_error: str | None = None
-    # Columns whose values were sampled, and columns the time budget did not
-    # reach. A model built without them still works; it just knows less about
-    # what its own columns contain, and the reader has to be told which.
+    # Sampling the values of each candidate column, counted as it goes. Not a
+    # budget any more: a build runs once and its model is used until somebody
+    # rebuilds, so stopping early trades minutes once for a model that never
+    # learns what its own columns contain.
+    profile_total: int = 0
     profiled_columns: int = 0
-    unprofiled_columns: int = 0
+    unprofiled_columns: int = 0  # columns whose profile query failed or timed out
 
 
 class SemanticModelSummary(BaseModel):

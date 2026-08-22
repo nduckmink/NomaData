@@ -179,9 +179,15 @@ async def test_scope_limits_the_model_to_chosen_tables() -> None:
 class _EnrichProvider(AIProvider):
     """Renames everything it is shown, like a real enrichment pass would."""
 
-    def __init__(self, entities: dict[str, str], metrics: dict[str, str]) -> None:
+    def __init__(
+        self,
+        entities: dict[str, str],
+        metrics: dict[str, str],
+        unmeasured: set[str] | None = None,
+    ) -> None:
         self._entities = entities
         self._metrics = metrics
+        self._unmeasured = unmeasured or set()
         self.calls = 0
 
     @property
@@ -200,7 +206,12 @@ class _EnrichProvider(AIProvider):
         return schema.model_validate(
             {
                 "entities": [
-                    {"key": key, "name": name, "description": f"{name} description."}
+                    {
+                        "key": key,
+                        "name": name,
+                        "description": f"{name} description.",
+                        "measurable": key not in self._unmeasured,
+                    }
                     for key, name in self._entities.items()
                 ],
                 "metrics": [
@@ -405,3 +416,30 @@ async def test_legacy_graph_is_upgraded_on_load() -> None:
     assert graph.metrics[0].entity_key in keys
     assert graph.relationships[0].from_entity_key in keys
     assert graph.relationships[0].to_entity_key in keys
+
+
+async def test_a_table_nobody_measures_loses_its_row_count() -> None:
+    """The heuristic gives every table a count because counting rows is
+    mechanical. Whether a count of `role_user` is a number anyone asks for is a
+    judgement, and 122 of those buried the 16 metrics somebody designed."""
+    suggester = SemanticSuggester(
+        _EnrichProvider({CUSTOMERS: "Khách hàng", ORDERS: "Đơn hàng"}, {}, unmeasured={CUSTOMERS})
+    )
+    graph = suggester.heuristic(_catalog(), profiles=_profiles())
+
+    out = await suggester.enrich_batched(graph)
+
+    assert {m.entity_key for m in out.metrics} == {ORDERS}
+    # The table itself stays: nobody counts it, everybody slices by it.
+    assert {e.key for e in out.entities} == {CUSTOMERS, ORDERS}
+
+
+async def test_silence_is_not_a_no() -> None:
+    """A batch that failed, or a model that omitted the field, must not be read
+    as saying every table is worthless."""
+    suggester = SemanticSuggester(_EnrichProvider({}, {}))
+    graph = suggester.heuristic(_catalog(), profiles=_profiles())
+
+    out = await suggester.enrich_batched(graph)
+
+    assert {m.entity_key for m in out.metrics} == {CUSTOMERS, ORDERS}

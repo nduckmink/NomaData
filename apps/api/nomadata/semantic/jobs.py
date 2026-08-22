@@ -10,7 +10,6 @@ are in-memory and ephemeral — fine for a single-process dev/app server.
 from __future__ import annotations
 
 import asyncio
-import time
 import uuid
 from collections.abc import Callable, Coroutine
 from itertools import zip_longest
@@ -22,10 +21,10 @@ from nomadata.core.models import (
     BusinessContext,
     ColumnProfile,
     DatabaseCatalog,
-    DimensionKind,
     Entity,
     GenerationJob,
     JobStatus,
+    MetricDefinition,
     MetricKind,
     MetricSuggestRequest,
     ProfileTarget,
@@ -47,17 +46,19 @@ _Coro = Coroutine[Any, Any, None]
 _PROFILE_CONCURRENCY = 4
 _PROFILE_TIMEOUT_S = 15.0
 
-#: What actually has to be bounded is how long the build spends here, not how
-#: many columns it looks at. A count is a guess about somebody else's database:
-#: 400 was fine until a source arrived with 1328 candidate columns, and the next
-#: number would be wrong again. A budget holds whatever the database turns out
-#: to be — a small one finishes everything, a large one gets the best of it.
-_PROFILE_BUDGET_S = 120.0
+#: No global ceiling on purpose. A build is a deliberate, one-off act with a
+#: progress bar in front of it, and the thing it produces is used until somebody
+#: rebuilds — so stopping early trades a few minutes once against a model that
+#: knows nothing about its own columns for as long as it lives. The per-column
+#: timeout above is the guard that belongs here: one pathological column is
+#: skipped, the other thousand are not. A database too large for this is one
+#: where the user narrows the table scope, which the build screen already
+#: offers — a choice made with the numbers in front of them, not one made
+#: silently on their behalf.
 
-#: How many fact-like entities a build proposes real metrics for. A count-only
-#: model is not worth reviewing; but suggesting for every table would explode
-#: cost, so the build spends its budget on the tables that look like facts.
-_MAX_SUGGESTED_ENTITIES = 8
+#: Which entities get metric proposals is decided by the naming pass, not by a
+#: number here — see ``_measurable_entities``. A count-only model is not worth
+#: reviewing, and the tables worth measuring are the ones a person would name.
 _SUGGEST_CONCURRENCY = 2
 _SUGGEST_TIMEOUT_S = 60.0
 
@@ -191,6 +192,9 @@ class SemanticJobRunner:
             # real metrics for the tables that look like facts — as suggestions
             # the user keeps or deletes, never as published fact.
             graph = await self._suggest_metrics(job, graph, provider, context)
+            # Ratios come second: the pass above is what gives an entity the
+            # two numbers a ratio needs.
+            graph = await self._suggest_derived(job, graph, provider, context)
         await self._save(graph, source_id, previous)
 
     async def _suggest_metrics(
@@ -200,7 +204,7 @@ class SemanticJobRunner:
         provider: object,
         context: BusinessContext | None,
     ) -> SemanticGraph:
-        facts = _fact_entities(graph)
+        facts = _measurable_entities(graph)
         if not facts:
             return graph
 
@@ -241,6 +245,72 @@ class SemanticJobRunner:
             return graph
         return graph.model_copy(update={"metrics": [*graph.metrics, *added]})
 
+    async def _suggest_derived(
+        self,
+        job: GenerationJob,
+        graph: SemanticGraph,
+        provider: object,
+        context: BusinessContext | None,
+    ) -> SemanticGraph:
+        """Ratios over the base metrics an entity has just been given.
+
+        A total says how much happened; a ratio says whether it went well, and
+        that second kind is what a business steers by. It cannot be proposed in
+        the pass above because at that point a table has only a row count, and a
+        ratio needs two numbers.
+
+        Only entities with two base metrics or more, so no call is spent on a
+        table that has nothing to combine.
+        """
+        candidates = [
+            entity
+            for entity in graph.entities
+            if not entity.hidden
+            and len(
+                [
+                    m
+                    for m in graph.metrics
+                    if m.entity_key == entity.key
+                    and m.kind == MetricKind.base
+                    and not _is_plain_count(m)
+                ]
+            )
+            >= 2
+        ]
+        if not candidates:
+            return graph
+
+        base_total = job.total
+        suggester = MetricSuggester(provider)  # type: ignore[arg-type]
+        semaphore = asyncio.Semaphore(_SUGGEST_CONCURRENCY)
+        extra: dict[str, list] = {}
+
+        async def run(entity: Entity) -> None:
+            async with semaphore:
+                try:
+                    result = await asyncio.wait_for(
+                        suggester.suggest_derived(entity.key, graph, context=context),
+                        timeout=_SUGGEST_TIMEOUT_S,
+                    )
+                    extra[entity.key] = result.metrics
+                except Exception as exc:  # noqa: BLE001 - a table without ratios is fine
+                    self._batch_error(job)(describe_exception(exc))
+
+        await asyncio.gather(*[run(e) for e in candidates])
+        job.total = base_total
+
+        seen = {_metric_recipe(m) for m in graph.metrics}
+        added: list = []
+        for metrics in extra.values():
+            for metric in metrics:
+                recipe = _metric_recipe(metric)
+                if recipe not in seen:
+                    seen.add(recipe)
+                    added.append(metric)
+        if not added:
+            return graph
+        return graph.model_copy(update={"metrics": [*graph.metrics, *added]})
+
     async def _save(
         self, graph: SemanticGraph, source_id: str, previous: SemanticGraph | None
     ) -> None:
@@ -250,37 +320,46 @@ class SemanticJobRunner:
         await self._semantic.save_draft(graph.model_copy(update={"source_id": source_id}))
 
 
-def _fact_entities(graph: SemanticGraph) -> list[Entity]:
-    """Entities that look like they record events worth measuring.
+def _measurable_entities(graph: SemanticGraph) -> list[Entity]:
+    """Entities worth asking an AI to design metrics for.
 
-    A fact table has a date (when the event happened) and a non-key number (the
-    amount). Lookup and junction tables have neither, so they are not worth an
-    AI call — and the suggester would return nothing for them anyway. Ranked by
-    how much a table carries, capped so a build stays affordable.
+    The old rule looked for a date and a non-key number and took the top eight.
+    Structure cannot tell a table anyone measures from one nobody does — on this
+    source it called 95 of 122 tables facts, including permission tables and
+    audit logs — and the cap of eight then meant the judgement was made by
+    whichever of those happened to have the most numeric columns.
+
+    The naming pass has already answered the question properly, table by table,
+    at no extra cost, and it recorded its answer by leaving the row count in
+    place or removing it. So the tables that still carry a count are the tables
+    somebody measures, and that is the scope. No cap: the scope came from a
+    judgement about the business rather than from a number we chose, and cutting
+    it again here would put the arbitrary limit straight back.
     """
-    scored: list[tuple[int, Entity]] = []
+    measurable: list[Entity] = []
     for entity in graph.entities:
         if entity.hidden:
             continue
-        visible = [d for d in entity.dimensions if not d.hidden]
-        has_time = any(d.kind == DimensionKind.time for d in visible)
-        numbers = [
-            d for d in visible if d.kind == DimensionKind.number and not d.column.endswith("_id")
-        ]
-        if not (has_time and numbers):
+        mine = [m for m in graph.metrics if m.entity_key == entity.key]
+        # A table the user has already given real metrics needs no proposals.
+        if any(
+            m.kind == MetricKind.base and (m.aggregation is None or str(m.aggregation) != "count")
+            for m in mine
+        ):
             continue
-        # Skip a table the user already gave real (non-count) metrics.
-        has_real = any(
-            m.entity_key == entity.key
-            and m.kind == MetricKind.base
-            and (m.aggregation is None or str(m.aggregation) != "count")
-            for m in graph.metrics
-        )
-        if has_real:
-            continue
-        scored.append((len(numbers), entity))
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    return [entity for _, entity in scored[:_MAX_SUGGESTED_ENTITIES]]
+        if any(_is_plain_count(m) for m in mine):
+            measurable.append(entity)
+    return measurable
+
+
+def _is_plain_count(metric: MetricDefinition) -> bool:
+    return (
+        metric.kind == MetricKind.base
+        and metric.aggregation is not None
+        and str(metric.aggregation).endswith("count")
+        and not metric.filters
+        and not metric.column
+    )
 
 
 def _metric_recipe(metric: object) -> str:
@@ -339,34 +418,28 @@ async def profile_dimension_candidates(
     targets = _interleave_by_table(_dimension_candidates(catalog, tables))
     profiles: dict[tuple[str, str], ColumnProfile] = {}
     semaphore = asyncio.Semaphore(_PROFILE_CONCURRENCY)
-    deadline = time.monotonic() + _PROFILE_BUDGET_S
-    skipped = 0
+    failed = 0
+    if job is not None:
+        job.profile_total = len(targets)
 
     async def run(target: ProfileTarget) -> None:
-        nonlocal skipped
+        nonlocal failed
         async with semaphore:
-            if time.monotonic() > deadline:
-                skipped += 1
-                return
             try:
                 profile = await asyncio.wait_for(source.profile(target), timeout=_PROFILE_TIMEOUT_S)
             except Exception:  # noqa: BLE001 - a column we cannot profile is fine
-                return
-            profiles[(target.table, target.column)] = profile
+                failed += 1
+            else:
+                profiles[(target.table, target.column)] = profile
+            if job is not None:
+                # Counted as it goes, so the screen can say what it is doing
+                # instead of holding a bar still for several minutes.
+                job.profiled_columns = len(profiles)
+                job.unprofiled_columns = failed
 
     await asyncio.gather(*[run(t) for t in targets])
-    if job is not None:
-        job.profiled_columns = len(profiles)
-        job.unprofiled_columns = skipped
-    if skipped:
-        # Somebody has to be told. This used to be a log line nobody read, and a
-        # model shipped knowing nothing about two thirds of its own tables.
-        log.warning(
-            "semantic.profile.budget_spent",
-            profiled=len(profiles),
-            skipped=skipped,
-            budget_s=_PROFILE_BUDGET_S,
-        )
+    if failed:
+        log.warning("semantic.profile.incomplete", profiled=len(profiles), failed=failed)
     return profiles
 
 
