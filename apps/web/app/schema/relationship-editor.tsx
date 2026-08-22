@@ -176,7 +176,7 @@ export function RelationshipEditor({
                         )}
                         title={isNew ? "Unsaved" : undefined}
                       />
-                      <MiniSelect
+                      <PickCell
                         value={r.from_entity_key}
                         onChange={(v) =>
                           update(i, {
@@ -186,12 +186,11 @@ export function RelationshipEditor({
                         }
                         label="From entity"
                         options={entityOptions}
-                        className="w-full"
                       />
                     </span>
                   </TableCell>
                   <TableCell>
-                    <MiniSelect
+                    <PickCell
                       value={r.from_column}
                       onChange={(v) => update(i, { from_column: v })}
                       label="From column"
@@ -199,11 +198,10 @@ export function RelationshipEditor({
                         value: c,
                         label: c,
                       }))}
-                      className="w-full"
                     />
                   </TableCell>
                   <TableCell>
-                    <MiniSelect
+                    <PickCell
                       value={r.to_entity_key}
                       onChange={(v) =>
                         update(i, {
@@ -213,11 +211,10 @@ export function RelationshipEditor({
                       }
                       label="To entity"
                       options={entityOptions}
-                      className="w-full"
                     />
                   </TableCell>
                   <TableCell>
-                    <MiniSelect
+                    <PickCell
                       value={r.to_column}
                       onChange={(v) => update(i, { to_column: v })}
                       label="To column"
@@ -225,16 +222,14 @@ export function RelationshipEditor({
                         value: c,
                         label: c,
                       }))}
-                      className="w-full"
                     />
                   </TableCell>
                   <TableCell>
-                    <MiniSelect
+                    <PickCell
                       value={r.kind}
                       onChange={(v) => update(i, { kind: v })}
                       label="Link kind"
                       options={KINDS}
-                      className="w-full"
                     />
                   </TableCell>
                   <TableCell>
@@ -267,5 +262,61 @@ export function RelationshipEditor({
         </Table>
       </div>
     </div>
+  )
+}
+
+/** A cell that reads as text and becomes a picker where it is clicked.
+ *
+ *  183 rows with five dropdowns each is 915 select controls mounted so that
+ *  somebody can change one of them. A relationship is read far more often than
+ *  it is edited, so the row is text until it isn't — which is both cheaper and
+ *  quieter to look at than a wall of dropdowns.
+ */
+function PickCell({
+  value,
+  options,
+  label,
+  placeholder,
+  onChange,
+}: {
+  value: string
+  options: { value: string; label: string }[]
+  label: string
+  placeholder?: string
+  onChange: (v: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const shown = options.find((o) => o.value === value)?.label
+
+  if (editing) {
+    return (
+      <MiniSelect
+        value={value}
+        onChange={(v) => {
+          onChange(v)
+          setEditing(false)
+        }}
+        label={label}
+        placeholder={placeholder}
+        options={options}
+        className="w-full"
+        defaultOpen
+        onClose={() => setEditing(false)}
+      />
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      aria-label={`${label}: ${shown ?? "not set"}. Click to change.`}
+      className={cn(
+        "flex h-8 w-full items-center rounded-md border border-transparent px-2 text-left text-sm transition-colors hover:border-border/60 hover:bg-wash",
+        !shown && "text-muted-foreground"
+      )}
+    >
+      <span className="truncate">{shown ?? placeholder ?? "—"}</span>
+    </button>
   )
 }

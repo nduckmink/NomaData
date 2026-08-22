@@ -211,6 +211,8 @@ export function MiniSelect({
   className,
   empty,
   highlighted,
+  defaultOpen,
+  onClose,
 }: {
   value: string
   onChange: (v: string) => void
@@ -220,14 +222,21 @@ export function MiniSelect({
   className?: string
   empty?: boolean
   highlighted?: boolean
+  /** Open as soon as it appears — for a cell that only becomes a control
+   *  because somebody clicked it, so the click should not need repeating. */
+  defaultOpen?: boolean
+  onClose?: () => void
 }) {
-  const [open, setOpen] = React.useState(false)
+  const [open, setOpen] = React.useState(defaultOpen ?? false)
   const selected = options.find((o) => o.value === value)
 
   return (
     <Select
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) onClose?.()
+      }}
       value={value || undefined}
       onValueChange={(v) => onChange(v === CLEAR ? "" : v)}
     >
