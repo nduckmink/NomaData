@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from nomadata.agent.runtime import AgentRuntime
 from nomadata.agent.tools import MAX_TOOL_ROWS, ToolBox, tool_specs
+from nomadata.agent.value_cache import VALUES
 from nomadata.core.interfaces.ai_provider import AIProvider
 from nomadata.core.interfaces.query_engine import QueryEngine
 from nomadata.core.models import (
@@ -93,8 +94,12 @@ def _graph() -> SemanticGraph:
 
 
 class FakeEngine(QueryEngine):
-    def __init__(self, result: QueryResult | None = None) -> None:
+    def __init__(
+        self, result: QueryResult | None = None, values: list[object] | None = None
+    ) -> None:
         self.ran: list[AnalyticalQuery] = []
+        self.asked_values: list[str] = []
+        self._values = values or []
         self._result = result or QueryResult(
             columns=[ResultColumn(name="Học phí đã thu", data_type="")],
             rows=[{"Học phí đã thu": 1284500000}],
@@ -107,6 +112,12 @@ class FakeEngine(QueryEngine):
     async def run(self, query: AnalyticalQuery, graph: SemanticGraph) -> QueryResult:
         self.ran.append(query)
         return self._result
+
+    async def distinct_values(
+        self, member: str, graph: SemanticGraph, *, limit: int = 25
+    ) -> list[object]:
+        self.asked_values.append(member)
+        return self._values
 
 
 class ScriptedProvider(AIProvider):
@@ -162,6 +173,7 @@ def test_the_toolset_excludes_raw_schema() -> None:
         "list_metrics",
         "describe_metric",
         "run_query",
+        "values_of",
         "reply",
         "ask_back",
         "decline",
@@ -379,3 +391,62 @@ async def test_the_headline_reads_the_measure_not_the_first_column() -> None:
     turn = await AgentRuntime(provider, engine).answer("học phí từng tháng", _graph())
 
     assert turn.answer == "42"
+
+
+# ----------------------------------------------------------------------
+# values_of
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_values_of_reports_what_is_actually_stored() -> None:
+    """The model names a column called Trạng thái; it does not say whether the
+    rows read COMPLETED, completed or 3. Filtering on the wrong one returns
+    nothing, which reads exactly like a real answer of zero."""
+    VALUES.clear()
+    engine = FakeEngine(values=["COMPLETED", "REJECTED"])
+    box = ToolBox(_graph(), engine)
+
+    out = await box.run("values_of", {"dimension": "Trạng thái"})
+
+    assert "COMPLETED" in out and "REJECTED" in out
+    assert engine.asked_values == ["hoc_phi.trang_thai"]
+
+
+@pytest.mark.asyncio
+async def test_a_second_ask_is_answered_from_memory() -> None:
+    """Values change with the schema, not with the question — one query an hour
+    rather than a round trip in front of every filter."""
+    VALUES.clear()
+    engine = FakeEngine(values=["COMPLETED"])
+    box = ToolBox(_graph(), engine)
+
+    await box.run("values_of", {"dimension": "Trạng thái"})
+    await box.run("values_of", {"dimension": "Trạng thái"})
+
+    assert len(engine.asked_values) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_ambiguous_dimension_is_asked_about_not_guessed() -> None:
+    VALUES.clear()
+    graph = _graph()
+    graph.entities[1].dimensions.append(
+        Dimension(name="Trạng thái", column="trang_thai", kind=DimensionKind.string)
+    )
+    box = ToolBox(graph, FakeEngine(values=["X"]))
+
+    out = await box.run("values_of", {"dimension": "Trạng thái"})
+
+    assert "More than one table" in out
+
+
+@pytest.mark.asyncio
+async def test_values_that_cannot_be_read_do_not_break_the_turn() -> None:
+    """A value list is a convenience. Losing it must not lose the question."""
+    VALUES.clear()
+    box = ToolBox(_graph(), FakeEngine(values=[]))
+
+    out = await box.run("values_of", {"dimension": "Trạng thái"})
+
+    assert "Could not read the values" in out

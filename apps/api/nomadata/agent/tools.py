@@ -34,6 +34,7 @@ from nomadata.agent.resolver import (
     queryable_metrics,
     resolve,
 )
+from nomadata.agent.value_cache import VALUES
 from nomadata.core.interfaces.query_engine import QueryEngine
 from nomadata.core.models import (
     AnalyticalQuery,
@@ -52,6 +53,10 @@ MAX_TOOL_ROWS = 50
 
 #: Metrics one `list_metrics` call may return, most relevant first.
 MAX_LISTED_METRICS = 25
+
+#: Values one `values_of` call shows. A column with more than this is not one
+#: anybody filters by naming a value, so a sample is as useful as the whole set.
+MAX_LISTED_VALUES = 40
 
 
 def tool_specs() -> list[ToolSpec]:
@@ -147,6 +152,29 @@ def tool_specs() -> list[ToolSpec]:
                     }
                 },
                 "required": ["reason"],
+            },
+        ),
+        ToolSpec(
+            name="values_of",
+            description=(
+                "The values actually stored in a dimension. Call this before "
+                "filtering on one: the model says a column is called Status, "
+                "not whether its rows say COMPLETED, completed or 3. Filtering "
+                "on a value that is not there returns nothing and looks like an "
+                "answer."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "dimension": {
+                        "type": "string",
+                        "description": (
+                            'The dimension name, written "Table.Name" if the '
+                            "same name appears on more than one table."
+                        ),
+                    }
+                },
+                "required": ["dimension"],
             },
         ),
         ToolSpec(
@@ -282,6 +310,8 @@ class ToolBox:
                     return "decline needs a `reason`. Say why you will not answer."
                 self.ended = ("refuse", text)
                 return "Declined. Your turn is over."
+            if name == "values_of":
+                return await self._values_of(str(arguments.get("dimension") or ""))
             if name == "list_metrics":
                 return self._list_metrics(str(arguments.get("topic") or ""))
             if name == "describe_metric":
@@ -366,6 +396,48 @@ class ToolBox:
             return next((m for m in self._graph.metrics if m.id == metric_id), None)
         wanted = normalise(name)
         return next((m for m in self._graph.metrics if normalise(m.name) == wanted), None)
+
+    # ------------------------------------------------------------------
+    # values_of
+    # ------------------------------------------------------------------
+
+    async def _values_of(self, name: str) -> str:
+        """What is in a column, asked once an hour rather than profiled in bulk.
+
+        Profiling every column when the model is built scales with the database
+        and goes stale; this scales with the question and is current. The value
+        list is a convenience, so a failure to get one comes back as words
+        rather than an exception.
+        """
+        if not name.strip():
+            return "values_of needs a `dimension`. Name the one you want values for."
+
+        mapping = member_map(self._graph)
+        options = mapping.dimension_options.get(normalise(name), [])
+        if not options:
+            return (
+                f"No dimension called {name!r} in this model. "
+                "Call list_metrics to see what can be sliced by."
+            )
+        if len(options) > 1:
+            where = ", ".join(sorted(mapping.member_labels.get(m, m) for m in options))
+            return f"More than one table has {name!r} ({where}). Ask for one of those."
+
+        member = options[0]
+        cached = VALUES.get(self._graph.source_id, member)
+        if cached is None:
+            cached = list(await self._engine.distinct_values(member, self._graph))
+            VALUES.put(self._graph.source_id, member, cached)
+
+        if not cached:
+            return (
+                f"Could not read the values of {name!r}. Filter on it only if the "
+                "user named an exact value."
+            )
+        shown = cached[:MAX_LISTED_VALUES]
+        more = "" if len(cached) <= MAX_LISTED_VALUES else f" (first {MAX_LISTED_VALUES})"
+        listed = ", ".join(json.dumps(v, ensure_ascii=False) for v in shown)
+        return f"{name} holds{more}: {listed}" + ("\nUse one of these exactly, or ask the user.")
 
     # ------------------------------------------------------------------
     # run_query

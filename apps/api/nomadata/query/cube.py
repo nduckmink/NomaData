@@ -179,6 +179,27 @@ class CubeQueryEngine(QueryEngine):
             truncated=len(rows) >= limit,
         )
 
+    async def distinct_values(
+        self, member: str, graph: SemanticGraph, *, limit: int = 25
+    ) -> list[object]:
+        """The values stored in one dimension, asked of Cube like any query.
+
+        Through Cube rather than the source database on purpose: this path may
+        only ever reach a *published* dimension. Reading the raw column would
+        let the answering side see fields the semantic layer deliberately hides.
+        """
+        token = jwt.encode({"source": graph.source_id}, self._secret, algorithm="HS256")
+        body = {"query": {"dimensions": [member], "limit": max(1, min(limit, 200))}}
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                data = await self._load(client, {"Authorization": token}, body)
+        except (httpx.HTTPError, QueryEngineError):
+            # A value list is a convenience. Failing to get one must not fail
+            # the question it was meant to help answer.
+            return []
+        values = [row.get(member) for row in data.get("data", [])]
+        return [v for v in values if v is not None]
+
     async def _load(
         self, client: httpx.AsyncClient, headers: dict[str, str], body: dict[str, Any]
     ) -> dict[str, Any]:

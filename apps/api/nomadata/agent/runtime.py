@@ -113,6 +113,10 @@ _TOOL_SYSTEM = (
     "column. A metric name is used on its own; a dimension may be written "
     '"Table.Name" when the same name appears on more than one table.\n'
     "If a tool rejects a name, read what it says and correct it.\n"
+    "Before filtering on a dimension, call values_of to see what it holds. "
+    "The model names the column, not its contents: a filter written as "
+    "'Đã hoàn thành' against rows that say 'COMPLETED' returns nothing, and "
+    "an empty result reads exactly like a real answer of zero.\n"
     "Before running anything, compare the user's words against the metric "
     "names. If one metric's name contains those words and the others do not, "
     "that is the metric — use it and do not ask. Call ask_back only when the "
