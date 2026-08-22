@@ -12,6 +12,7 @@ honors a strict JSON schema, so we verify rather than trust.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any, TypeVar
@@ -37,6 +38,14 @@ from nomadata.logging import get_logger
 T = TypeVar("T", bound=BaseModel)
 
 log = get_logger()
+
+#: Retried failures are the ones that pass on their own: a dropped connection,
+#: a rate limit, a gateway that was restarting. Three attempts, doubling from
+#: half a second — long enough to outlast a blip, short enough that a person
+#: waiting does not conclude the thing is broken.
+_MAX_ATTEMPTS = 3
+_RETRY_BACKOFF_S = 0.5
+_RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
 class AIProviderError(NomaDataError):
@@ -159,18 +168,50 @@ class OpenAICompatibleProvider(AIProvider):
         return ConnectionStatus(state=ConnectionState.ok, latency_ms=latency)
 
     async def _post_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
-        try:
-            resp = await self._http().post("/chat/completions", json=payload)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text[:500]
-            raise AIProviderError(
-                f"AI provider returned {exc.response.status_code}: {body}"
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise AIProviderError(f"AI provider request failed: {exc}") from exc
-        data: dict[str, Any] = resp.json()
-        return data
+        """POST one completion, retrying what is worth retrying.
+
+        A provider drops a connection, or answers 429 or 503, and the question
+        behind it is lost — a person watching a spinner for eight seconds gets
+        an error for something that would have worked a second later. These are
+        the failures that pass on their own, so they are the ones retried.
+
+        A 400 or a 401 is not: the request is wrong or the key is, and sending
+        it again is three times the wait for the same answer. Nor is a timeout
+        retried — the model was already given the time it was allowed, and
+        trying again spends it twice with a person waiting.
+        """
+        last: Exception | None = None
+        for attempt in range(_MAX_ATTEMPTS):
+            try:
+                resp = await self._http().post("/chat/completions", json=payload)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status not in _RETRYABLE_STATUS or attempt == _MAX_ATTEMPTS - 1:
+                    body = exc.response.text[:500]
+                    raise AIProviderError(f"AI provider returned {status}: {body}") from exc
+                last = exc
+            except httpx.TimeoutException as exc:
+                raise AIProviderError(f"AI provider request failed: {exc}") from exc
+            except httpx.HTTPError as exc:
+                if attempt == _MAX_ATTEMPTS - 1:
+                    raise AIProviderError(f"AI provider request failed: {exc}") from exc
+                last = exc
+            else:
+                data: dict[str, Any] = resp.json()
+                return data
+
+            delay = _RETRY_BACKOFF_S * (2**attempt)
+            log.warning(
+                "ai.request.retrying",
+                attempt=attempt + 1,
+                of=_MAX_ATTEMPTS,
+                delay_s=delay,
+                error=str(last)[:200],
+            )
+            await asyncio.sleep(delay)
+
+        raise AIProviderError(f"AI provider request failed: {last}")
 
     async def chat(self, messages: list[Message], **opts: Any) -> ChatResponse:
         payload: dict[str, Any] = {

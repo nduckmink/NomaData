@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -234,7 +235,7 @@ def test_an_exact_window_carries_the_zone_too() -> None:
 # ----------------------------------------------------------------------
 
 
-def _columns(rows: list[dict[str, object]], annotation: dict[str, object]) -> list[str]:
+def _columns(rows: list[dict[str, Any]], annotation: dict[str, Any]) -> list[str]:
     from nomadata.query.cube import CubeQueryEngine
 
     return [

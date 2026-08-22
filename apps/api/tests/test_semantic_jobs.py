@@ -24,7 +24,9 @@ class _NoopSemantic(SemanticModel):
     async def get_draft(self, source_id: str) -> SemanticGraph | None:
         return None
 
-    async def save_draft(self, graph: SemanticGraph) -> SemanticGraph:
+    async def save_draft(
+        self, graph: SemanticGraph, *, expected_revision: int | None = None
+    ) -> SemanticGraph:
         return graph
 
     async def publish(self, graph: SemanticGraph) -> PublishResult:

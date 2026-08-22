@@ -56,6 +56,11 @@ _MAX_REPAIRS = 2
 #: Enough for look-up, correct a rejected name, run — and no room to wander.
 _MAX_TOOL_TURNS = 4
 
+#: Tool calls across the whole turn. The turn cap bounds the rounds, not the
+#: work: one reply may carry any number of calls, and a model that asks for
+#: forty spends forty queries against the user's database on one question.
+_MAX_TOOL_CALLS = 12
+
 #: How much of a tool's output travels with its step. Enough to read the rows
 #: that were returned, not enough to store the whole result twice.
 _MAX_STEP_DETAIL = 4000
@@ -226,6 +231,13 @@ class AgentRuntime:
                 )
             )
             for call in response.tool_calls:
+                if usage.tool_calls >= _MAX_TOOL_CALLS:
+                    return AgentTurn(
+                        kind="error",
+                        question=question,
+                        reason="I kept looking without getting to an answer.",
+                        usage=usage,
+                    )
                 usage.tool_calls += 1
                 step = await steps.add("tool", _tool_label(call.name, call.arguments))
                 output = await box.run(call.name, call.arguments)

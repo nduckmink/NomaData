@@ -5,27 +5,40 @@ published model. It is NOT a CI gate: it measures how often the model maps a
 question to the expected query, and prints a table plus a score.
 
     # from apps/api, with `pnpm infra` + api running and a key in Settings:
-    NOMADATA_EVAL_SOURCE=scp_mysql uv run python -m tests.eval.live
+    uv run python -m tests.eval.live scp_mysql
 
-Optional env: NOMADATA_EVAL_URL (default http://localhost:8000),
-NOMADATA_EVAL_FILE (default questions.json). The checked-in questions.json is
-written for the offline fixture; for a real model, point NOMADATA_EVAL_FILE at a
-set whose gold `measures`/`dimensions` use THAT model's published names.
+The question set defaults to ``questions.<source>.json`` beside this file,
+falling back to ``questions.json``, so a new source needs a file rather than a
+remembered environment variable. A gold answer names metrics and dimensions in
+THAT model's published names — the file and the model belong together.
+
+    --url   the API (default http://localhost:8000)
+    --file  a question set somewhere else
 """
 
 from __future__ import annotations
 
+import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-_URL = os.environ.get("NOMADATA_EVAL_URL", "http://localhost:8000")
-_SOURCE = os.environ.get("NOMADATA_EVAL_SOURCE", "")
-_FILE = os.environ.get("NOMADATA_EVAL_FILE", str(Path(__file__).parent / "questions.json"))
+
+def _questions_for(source: str, given: str | None) -> Path:
+    """The question set to score against.
+
+    Named after the source, because gold answers quote one model's metric names
+    and are wrong against any other. A shared default was how a run scored a new
+    model against last month's names and reported everything as a miss.
+    """
+    if given:
+        return Path(given)
+    here = Path(__file__).parent
+    named = here / f"questions.{source}.json"
+    return named if named.exists() else here / "questions.json"
 
 
 def _bare(name: str) -> str:
@@ -49,22 +62,33 @@ def _matches(expect: dict[str, Any], query: dict[str, Any] | None) -> bool:
 
 
 def main() -> int:
-    if not _SOURCE:
-        print("Set NOMADATA_EVAL_SOURCE to a published data source name.")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", help="a published data source name")
+    parser.add_argument("--url", default="http://localhost:8000")
+    parser.add_argument("--file", default=None, help="a question set to score against")
+    args = parser.parse_args()
+
+    source: str = args.source
+    url: str = args.url
+    questions = _questions_for(source, args.file)
+    if not questions.exists():
+        print(f"No question set at {questions}.")
         return 2
-    cases: list[dict[str, Any]] = json.loads(Path(_FILE).read_text(encoding="utf-8"))
+
+    print(f"{source} · {questions.name} · {url}\n")
+    cases: list[dict[str, Any]] = json.loads(questions.read_text(encoding="utf-8"))
     hits = 0
     scored = 0
     non_answer_hits = 0
     declined: list[tuple[str, str]] = []
     failed: list[str] = []
-    with httpx.Client(base_url=_URL, timeout=120) as client:
+    with httpx.Client(base_url=url, timeout=120) as client:
         for case in cases:
             question = case["question"]
             expect = case.get("expect", {})
             try:
                 response = client.post(
-                    f"/api/v1/datasources/{_SOURCE}/chat", json={"question": question}
+                    f"/api/v1/datasources/{source}/chat", json={"question": question}
                 )
                 response.raise_for_status()
                 turn = response.json()

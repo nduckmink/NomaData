@@ -470,3 +470,26 @@ async def test_the_trust_line_says_what_was_filtered_out() -> None:
     turn = await AgentRuntime(provider, FakeEngine()).answer("học phí đã thu", _graph())
 
     assert turn.explanation.endswith("where Trạng thái eq COMPLETED.")
+
+
+@pytest.mark.asyncio
+async def test_a_reply_full_of_tool_calls_is_stopped() -> None:
+    """The turn cap bounds the rounds, not the work: one reply may carry any
+    number of calls, and a model asking for forty spends forty queries against
+    the user's database on one question."""
+    provider = ScriptedProvider(
+        [
+            ToolCallResponse(
+                tool_calls=[
+                    ToolCall(id=f"c{i}", name="list_metrics", arguments={"topic": "x"})
+                    for i in range(30)
+                ]
+            )
+        ]
+    )
+    engine = FakeEngine()
+
+    turn = await AgentRuntime(provider, engine).answer("gì đó", _graph())
+
+    assert turn.kind == "error"
+    assert turn.usage.tool_calls == 12
