@@ -1147,18 +1147,22 @@ function ModelNotes({
                 {issues.length}
               </button>
             </TooltipTrigger>
-            <TooltipContent className="max-w-md">
-              <p className="font-medium">
-                {errors.length > 0
-                  ? `${errors.length} problem(s) block publishing`
-                  : `${warnings.length} thing(s) worth checking`}
-              </p>
-              <ul className="mt-1 flex flex-col gap-0.5">
-                {issues.slice(0, 6).map((issue, i) => (
-                  <li key={`${issue.code}-${i}`}>• {issue.message}</li>
-                ))}
-                {issues.length > 6 && <li>…and {issues.length - 6} more</li>}
-              </ul>
+            {/* One child, not two: the tooltip lays its children out in a
+                row, so a heading beside a list became two narrow columns. */}
+            <TooltipContent className="max-w-sm">
+              <div className="flex flex-col gap-1">
+                <p className="font-medium">
+                  {errors.length > 0
+                    ? `${errors.length} problem(s) block publishing`
+                    : `${warnings.length} thing(s) worth checking`}
+                </p>
+                <ul className="flex flex-col gap-0.5">
+                  {issues.slice(0, 6).map((issue, i) => (
+                    <li key={`${issue.code}-${i}`}>• {issue.message}</li>
+                  ))}
+                  {issues.length > 6 && <li>…and {issues.length - 6} more</li>}
+                </ul>
+              </div>
             </TooltipContent>
           </Tooltip>
         )}
@@ -1175,18 +1179,20 @@ function ModelNotes({
                 {skipped.length}
               </button>
             </TooltipTrigger>
-            <TooltipContent className="max-w-md">
-              <p className="font-medium">
-                {skipped.length} table(s) were left out because they have no
-                primary key
-              </p>
-              <p className="mt-1 font-mono">
-                {skipped
-                  .slice(0, 12)
-                  .map((s) => s.table)
-                  .join(", ")}
-                {skipped.length > 12 && ` and ${skipped.length - 12} more`}
-              </p>
+            <TooltipContent className="max-w-sm">
+              <div className="flex flex-col gap-1">
+                <p className="font-medium">
+                  {skipped.length} table(s) were left out because they have no
+                  primary key
+                </p>
+                <p className="font-mono">
+                  {skipped
+                    .slice(0, 12)
+                    .map((s) => s.table)
+                    .join(", ")}
+                  {skipped.length > 12 && ` and ${skipped.length - 12} more`}
+                </p>
+              </div>
             </TooltipContent>
           </Tooltip>
         )}
