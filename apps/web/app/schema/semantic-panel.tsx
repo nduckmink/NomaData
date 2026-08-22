@@ -17,6 +17,7 @@ import {
 import {
   RiAddLine,
   RiAlertLine,
+  RiInformationLine,
   RiCheckLine,
   RiDeleteBinLine,
   RiEyeOffLine,
@@ -66,6 +67,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
 import { BuildModelDialog } from "./build-model-dialog"
@@ -586,6 +593,11 @@ export function SemanticPanel({ source }: { source: string }) {
             {graph.published ? "published" : "draft"}
           </Badge>
           <span className="tnum">v{graph.version}</span>
+          <ModelNotes
+            errors={errors}
+            warnings={warnings}
+            skipped={graph.skipped_tables}
+          />
           {dirty &&
             (() => {
               const n =
@@ -666,9 +678,6 @@ export function SemanticPanel({ source }: { source: string }) {
           />
         </div>
       </div>
-
-      <IssueBanner errors={errors} warnings={warnings} />
-      <SkippedBanner skipped={graph.skipped_tables} />
 
       {/* The tab is controlled, and what it renders lags behind on purpose.
           Relationships is 183 rows of five dropdowns each; switching to it
@@ -1089,59 +1098,100 @@ function TabLoading() {
   )
 }
 
-function IssueBanner({
+/** The model's warnings and its skipped tables, as two icons beside the
+ *  version.
+ *
+ *  They were full-width banners above the tabs. Both are things to know once
+ *  and then work past — a warning that a formula spans two tables, a note that
+ *  a table without a primary key was left out — and neither changes while the
+ *  page is open, so they sat there taking a fifth of the screen from the thing
+ *  being edited. As icons they are still one glance away, and absent entirely
+ *  when there is nothing to say.
+ *
+ *  Errors are the exception: those block publishing, so they keep the loud
+ *  colour even at this size.
+ */
+function ModelNotes({
   errors,
   warnings,
+  skipped,
 }: {
   errors: ValidationIssue[]
   warnings: ValidationIssue[]
-}) {
-  if (errors.length === 0 && warnings.length === 0) return null
-  const shown = [...errors, ...warnings].slice(0, 4)
-  return (
-    <div
-      className={cn(
-        "flex flex-col gap-1 border p-2 text-xs",
-        errors.length > 0
-          ? "border-destructive/40 bg-destructive/5"
-          : "border-amber-500/40 bg-amber-500/5"
-      )}
-    >
-      <span className="flex items-center gap-1.5 font-medium">
-        <RiAlertLine className="size-3.5" />
-        {errors.length > 0
-          ? `${errors.length} problem(s) block publishing`
-          : `${warnings.length} thing(s) worth checking`}
-      </span>
-      <ul className="flex flex-col gap-0.5 text-muted-foreground">
-        {shown.map((issue, i) => (
-          <li key={`${issue.code}-${i}`}>• {issue.message}</li>
-        ))}
-        {errors.length + warnings.length > shown.length && (
-          <li>…and {errors.length + warnings.length - shown.length} more</li>
-        )}
-      </ul>
-    </div>
-  )
-}
-
-function SkippedBanner({
-  skipped,
-}: {
   skipped: { table: string; reason: string }[]
 }) {
-  if (!skipped.length) return null
+  const issues = [...errors, ...warnings]
+  if (issues.length === 0 && skipped.length === 0) return null
+
   return (
-    <p className="border bg-wash p-2 text-xs text-muted-foreground">
-      {skipped.length} table(s) were left out because they have no primary key:{" "}
-      <span className="font-mono">
-        {skipped
-          .slice(0, 6)
-          .map((s) => s.table)
-          .join(", ")}
+    <TooltipProvider delayDuration={150}>
+      <span className="flex items-center gap-1">
+        {issues.length > 0 && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={
+                  errors.length > 0
+                    ? `${errors.length} problem(s) block publishing`
+                    : `${warnings.length} thing(s) worth checking`
+                }
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-sm px-1 py-0.5 text-xs",
+                  errors.length > 0
+                    ? "text-destructive hover:bg-destructive/10"
+                    : "text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+                )}
+              >
+                <RiAlertLine className="size-3.5" />
+                {issues.length}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-md">
+              <p className="font-medium">
+                {errors.length > 0
+                  ? `${errors.length} problem(s) block publishing`
+                  : `${warnings.length} thing(s) worth checking`}
+              </p>
+              <ul className="mt-1 flex flex-col gap-0.5">
+                {issues.slice(0, 6).map((issue, i) => (
+                  <li key={`${issue.code}-${i}`}>• {issue.message}</li>
+                ))}
+                {issues.length > 6 && <li>…and {issues.length - 6} more</li>}
+              </ul>
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        {skipped.length > 0 && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={`${skipped.length} table(s) left out`}
+                className="inline-flex items-center gap-1 rounded-sm px-1 py-0.5 text-xs hover:bg-wash"
+              >
+                <RiInformationLine className="size-3.5" />
+                {skipped.length}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-md">
+              <p className="font-medium">
+                {skipped.length} table(s) were left out because they have no
+                primary key
+              </p>
+              <p className="mt-1 font-mono">
+                {skipped
+                  .slice(0, 12)
+                  .map((s) => s.table)
+                  .join(", ")}
+                {skipped.length > 12 && ` and ${skipped.length - 12} more`}
+              </p>
+            </TooltipContent>
+          </Tooltip>
+        )}
       </span>
-      {skipped.length > 6 && ` and ${skipped.length - 6} more`}.
-    </p>
+    </TooltipProvider>
   )
 }
 

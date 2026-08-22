@@ -458,7 +458,6 @@ function FormulaEditor({
   return (
     <FormField
       label="Formula"
-      hint="Built from other metrics on the same table, e.g. Revenue ÷ Order count."
       highlighted={highlighted}
     >
       {asText ? (
