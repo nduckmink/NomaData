@@ -133,3 +133,78 @@ def test_a_table_that_already_has_real_metrics_needs_no_proposals() -> None:
     )
 
     assert _measurable_entities(graph) == []
+
+
+# ----------------------------------------------------------------------
+# Metric names are what formulas quote
+# ----------------------------------------------------------------------
+
+
+def test_a_duplicate_metric_name_is_broken_by_its_table() -> None:
+    """Two metrics with one name is not untidiness, it is an ambiguity the
+    compiler resolves by accident: it maps name→entity, the duplicate keeps
+    whichever came last, and a sound ratio then resolves half of itself to the
+    wrong table and is dropped as spanning two. One duplicate cost two working
+    ratios on the source this was found on."""
+    from nomadata.core.models import Aggregation, MetricKind
+    from nomadata.semantic.jobs import _unique_metric_names
+
+    fees = _entity_with("a.fees", "fees", [("amount", "number")])
+    notices = _entity_with("a.notices", "notices", [("amount", "number")])
+    notices = notices.model_copy(update={"name": "Thông báo"})
+    graph = SemanticGraph(
+        source_id="s",
+        entities=[fees, notices],
+        metrics=[
+            MetricDefinition(
+                name="Tổng phí sau thuế",
+                kind=MetricKind.base,
+                entity_key="a.fees",
+                aggregation=Aggregation.sum,
+                column="amount",
+            ),
+            MetricDefinition(
+                name="Tổng phí sau thuế",
+                kind=MetricKind.base,
+                entity_key="a.notices",
+                aggregation=Aggregation.sum,
+                column="amount",
+            ),
+        ],
+    )
+
+    names = [m.name for m in _unique_metric_names(graph).metrics]
+
+    # The first keeps the plain name: renaming both would leave every reader
+    # wondering what the other one is.
+    assert names == ["Tổng phí sau thuế", "Tổng phí sau thuế (Thông báo)"]
+
+
+def test_names_that_are_already_distinct_are_left_alone() -> None:
+    from nomadata.core.models import Aggregation, MetricKind
+    from nomadata.semantic.jobs import _unique_metric_names
+
+    graph = SemanticGraph(
+        source_id="s",
+        entities=[_entity_with("a.fees", "fees", [("amount", "number")])],
+        metrics=[
+            MetricDefinition(
+                name="Tổng phí",
+                kind=MetricKind.base,
+                entity_key="a.fees",
+                aggregation=Aggregation.sum,
+                column="amount",
+            ),
+            MetricDefinition(
+                name="Số phí",
+                kind=MetricKind.base,
+                entity_key="a.fees",
+                aggregation=Aggregation.count,
+            ),
+        ],
+    )
+
+    assert [m.name for m in _unique_metric_names(graph).metrics] == [
+        "Tổng phí",
+        "Số phí",
+    ]

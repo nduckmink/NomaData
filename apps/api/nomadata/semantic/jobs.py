@@ -192,9 +192,15 @@ class SemanticJobRunner:
             # real metrics for the tables that look like facts — as suggestions
             # the user keeps or deletes, never as published fact.
             graph = await self._suggest_metrics(job, graph, provider, context)
+            # Before ratios are proposed: a formula quotes a metric by
+            # name, so the names have to be final and distinct first.
+            graph = _unique_metric_names(graph)
             # Ratios come second: the pass above is what gives an entity the
             # two numbers a ratio needs.
             graph = await self._suggest_derived(job, graph, provider, context)
+            # And again for the ratios themselves. Nothing refers to a
+            # derived metric, so renaming one here breaks nothing.
+            graph = _unique_metric_names(graph)
         await self._save(graph, source_id, previous)
 
     async def _suggest_metrics(
@@ -318,6 +324,47 @@ class SemanticJobRunner:
         # job is the one writer that must not fail on a conflict — it merged the
         # previous draft already — so it writes unconditionally.
         await self._semantic.save_draft(graph.model_copy(update={"source_id": source_id}))
+
+
+def _unique_metric_names(graph: SemanticGraph) -> SemanticGraph:
+    """Give every metric a name no other metric has.
+
+    A formula refers to a metric by name, so two metrics called the same thing
+    are not a tidiness problem — they are an ambiguity the compiler resolves by
+    accident. It builds a name→entity map, a duplicate keeps whichever came
+    last, and a perfectly good ratio then resolves half of itself to the wrong
+    table and is dropped as "combines metrics from different entities". One
+    duplicate cost two working ratios on this source.
+
+    The collision is broken by the table the metric measures, which is the thing
+    that actually differs. The first one keeps the plain name: renaming both
+    would make every reader wonder what the other one is.
+
+    Run this before ratios are proposed, so formulas quote final names and
+    nothing has to be rewritten afterwards.
+    """
+    by_key = {e.key: e for e in graph.entities}
+    taken: set[str] = set()
+    renamed: list[MetricDefinition] = []
+
+    for metric in graph.metrics:
+        name = metric.name.strip()
+        if not name or name not in taken:
+            taken.add(name)
+            renamed.append(metric)
+            continue
+
+        entity = by_key.get(metric.entity_key or "")
+        candidate = f"{name} ({entity.name})" if entity else f"{name} (2)"
+        suffix = 2
+        while candidate in taken:
+            suffix += 1
+            candidate = f"{name} ({suffix})"
+        log.info("semantic.metric.renamed", was=name, now=candidate)
+        taken.add(candidate)
+        renamed.append(metric.model_copy(update={"name": candidate}))
+
+    return graph.model_copy(update={"metrics": renamed})
 
 
 def _measurable_entities(graph: SemanticGraph) -> list[Entity]:
