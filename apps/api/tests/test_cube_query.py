@@ -227,3 +227,72 @@ def test_an_exact_window_carries_the_zone_too() -> None:
     compiled = build_cube_query(query)
     assert compiled["timezone"] == "Asia/Ho_Chi_Minh"
     assert compiled["timeDimensions"][0]["dateRange"] == ["2026-08-01", "2026-08-31"]
+
+
+# ----------------------------------------------------------------------
+# Reading the result back
+# ----------------------------------------------------------------------
+
+
+def _columns(rows: list[dict[str, object]], annotation: dict[str, object]) -> list[str]:
+    from nomadata.query.cube import CubeQueryEngine
+
+    return [
+        c.name
+        for c in CubeQueryEngine._columns(rows, {"annotation": annotation})  # noqa: SLF001
+    ]
+
+
+def test_the_column_grouped_by_is_a_column() -> None:
+    """A total by month came back as six numbers with no months beside them:
+    Cube annotates timeDimensions separately and only measures and dimensions
+    were read, so the column the result was about was missing from it."""
+    rows = [
+        {
+            "t.transaction_date.month": "2026-05-01",
+            "t.Tong": 1_100_485_425,
+            "t.transaction_date": "2026-05-01",
+        }
+    ]
+    annotation = {
+        "measures": {"t.Tong": {"type": "number"}},
+        "dimensions": {},
+        "timeDimensions": {
+            "t.transaction_date": {"type": "time"},
+            "t.transaction_date.month": {"type": "time"},
+        },
+    }
+
+    # The granular one only: the bare date beside it is the same day again.
+    assert _columns(rows, annotation) == ["t.transaction_date.month", "t.Tong"]
+
+
+def test_what_the_rows_are_about_comes_before_what_was_measured() -> None:
+    rows = [{"t.status": "paid", "t.Tong": 10, "t.transaction_date.month": "2026-05-01"}]
+    annotation = {
+        "measures": {"t.Tong": {"type": "number"}},
+        "dimensions": {"t.status": {"type": "string"}},
+        "timeDimensions": {"t.transaction_date.month": {"type": "time"}},
+    }
+
+    assert _columns(rows, annotation) == [
+        "t.transaction_date.month",
+        "t.status",
+        "t.Tong",
+    ]
+
+
+def test_a_member_cube_named_but_did_not_return_is_not_a_column() -> None:
+    rows = [{"t.Tong": 10}]
+    annotation = {
+        "measures": {"t.Tong": {"type": "number"}},
+        "dimensions": {"t.status": {"type": "string"}},
+        "timeDimensions": {},
+    }
+
+    assert _columns(rows, annotation) == ["t.Tong"]
+
+
+def test_without_an_annotation_the_rows_still_describe_themselves() -> None:
+    assert _columns([{"a": 1, "b": 2}], {}) == ["a", "b"]
+    assert _columns([], {}) == []

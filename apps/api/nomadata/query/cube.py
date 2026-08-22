@@ -200,12 +200,40 @@ class CubeQueryEngine(QueryEngine):
 
     @staticmethod
     def _columns(rows: list[dict[str, Any]], data: dict[str, Any]) -> list[ResultColumn]:
+        """The columns of the result, in the order a table should read them.
+
+        Cube annotates four groups and ``timeDimensions`` is one of them. Reading
+        only measures and dimensions dropped the very column a grouped result is
+        about: a total by month came back as six numbers with no months beside
+        them, because the month lived in every row but in no column. What is in
+        the rows is the truth; the annotation only names it.
+
+        Grouped by month, Cube puts both ``date.month`` and a bare ``date`` in
+        each row — the same day twice. Only the granular one is kept.
+        """
         annotation = data.get("annotation", {})
-        members = {**annotation.get("measures", {}), **annotation.get("dimensions", {})}
-        if members:
+        times = annotation.get("timeDimensions", {})
+        present = set(rows[0].keys()) if rows else set()
+        granular = {key.rsplit(".", 1)[0] for key in times if key.count(".") > 1}
+
+        def usable(members: dict[str, Any]) -> list[tuple[str, Any]]:
             return [
-                ResultColumn(name=key, data_type=str(meta.get("type", "")))
+                (key, meta)
                 for key, meta in members.items()
+                # A member Cube named but did not return is not a column, and a
+                # bare date beside its own granularity is the same day again.
+                if (not present or key in present) and key not in granular
             ]
-        keys = list(rows[0].keys()) if rows else []
-        return [ResultColumn(name=k, data_type="") for k in keys]
+
+        # Time first, then the other dimensions, then the numbers — what the
+        # rows are about before what was measured about them.
+        ordered = [
+            *usable(times),
+            *usable(annotation.get("dimensions", {})),
+            *usable(annotation.get("measures", {})),
+        ]
+        if ordered:
+            return [
+                ResultColumn(name=key, data_type=str(meta.get("type", ""))) for key, meta in ordered
+            ]
+        return [ResultColumn(name=k, data_type="") for k in (rows[0] if rows else {})]
