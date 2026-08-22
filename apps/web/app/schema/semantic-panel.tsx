@@ -6,7 +6,14 @@
  * Scoped to one data source — the cross-source overview lives at /semantic.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import {
   RiAddLine,
   RiAlertLine,
@@ -137,6 +144,12 @@ export function SemanticPanel({ source }: { source: string }) {
   // *which* rows are unsaved, instead of one flag saying that something is.
   const [saved, setSaved] = useState<SemanticGraph | null>(null)
   const [dirty, setDirty] = useState(false)
+  const [tab, setTab] = useState("entities")
+  // What is actually rendered. React lets this fall behind while a heavy tab
+  // builds, which is what makes the switch itself feel instant.
+  const shownTab = useDeferredValue(tab)
+  const switching = shownTab !== tab
+
   const [action, setAction] = useState<"save" | "publish" | "delete" | null>(
     null
   )
@@ -657,8 +670,14 @@ export function SemanticPanel({ source }: { source: string }) {
       <IssueBanner errors={errors} warnings={warnings} />
       <SkippedBanner skipped={graph.skipped_tables} />
 
+      {/* The tab is controlled, and what it renders lags behind on purpose.
+          Relationships is 183 rows of five dropdowns each; switching to it
+          spent several seconds on the old tab before the new one appeared, so
+          the click read as a page that had failed. React paints the new tab
+          first and builds its contents after, and the gap is a spinner. */}
       <Tabs
-        defaultValue="entities"
+        value={tab}
+        onValueChange={setTab}
         className="flex min-h-0 flex-1 flex-col gap-3"
       >
         <TabsList>
@@ -797,13 +816,17 @@ export function SemanticPanel({ source }: { source: string }) {
           value="relationships"
           className="flex min-h-0 flex-1 flex-col"
         >
-          <RelationshipEditor
-            source={source}
-            entities={graph.entities}
-            relationships={graph.relationships}
-            savedSignatures={changes.savedRelSigs}
-            onChange={setRelationships}
-          />
+          {switching ? (
+            <TabLoading />
+          ) : (
+            <RelationshipEditor
+              source={source}
+              entities={graph.entities}
+              relationships={graph.relationships}
+              savedSignatures={changes.savedRelSigs}
+              onChange={setRelationships}
+            />
+          )}
         </TabsContent>
       </Tabs>
     </div>
@@ -1049,6 +1072,17 @@ function DimensionRow({
       >
         {dimension.hidden ? <RiEyeOffLine /> : <RiCheckLine />}
       </Button>
+    </div>
+  )
+}
+
+/** Shown while a heavy tab builds. Several seconds of the previous tab still
+ *  being on screen reads as a click that did nothing. */
+function TabLoading() {
+  return (
+    <div className="flex flex-1 items-center justify-center gap-2 border bg-wash py-14 text-sm text-muted-foreground">
+      <RiLoader4Line className="size-4 animate-spin" />
+      Loading…
     </div>
   )
 }
