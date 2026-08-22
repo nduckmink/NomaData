@@ -427,9 +427,10 @@ export function MasterDetail({
       <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[minmax(0,4fr)_minmax(0,6fr)]">
         {list}
         <div className="min-h-0 overflow-y-auto">
-          <div className="flex max-w-2xl flex-col gap-4 pr-1 pb-4">
-            {children}
-          </div>
+          {/* No reading-width cap: this pane holds forms, a formula and a
+              result table, not prose. Capping it at 2xl left the right of a
+              wide screen empty while the formula chips wrapped. */}
+          <div className="flex flex-col gap-4 pr-1 pb-4">{children}</div>
         </div>
       </div>
     </div>
