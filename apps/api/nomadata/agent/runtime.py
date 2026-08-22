@@ -118,6 +118,11 @@ _TOOL_SYSTEM = (
     "column. A metric name is used on its own; a dimension may be written "
     '"Table.Name" when the same name appears on more than one table.\n'
     "If a tool rejects a name, read what it says and correct it.\n"
+    "An empty result is not automatically a failure. run_query says which kind "
+    "of empty it is: a filter matching nothing is worth fixing, a metric with "
+    "no data at all is worth saying plainly, and a period with no rows IS the "
+    "answer — report it. Never work through other periods or other metrics "
+    "until some number appears.\n"
     "Before filtering on a dimension, call values_of to see what it holds. "
     "The model names the column, not its contents: a filter written as "
     "'Đã hoàn thành' against rows that say 'COMPLETED' returns nothing, and "
@@ -294,7 +299,11 @@ class AgentRuntime:
                     result=box.last_result,
                     answer=_summarize(box.last_result),
                     explanation=explain(box.last_query, graph),
-                    notes=box.last_notes,
+                    # Why it was empty travels with the answer, not only back to
+                    # the model. The reader is the one who decides whether a
+                    # quiet month is right, and "no matching rows" on its own
+                    # does not let them.
+                    notes=[*box.last_notes, *_empty_note(box)],
                     usage=usage,
                 )
 
@@ -450,6 +459,11 @@ def _tool_label(name: str, arguments: dict[str, Any]) -> str:
             return f"Running {', '.join(str(m) for m in measures)}"
         return "Running the query"
     return f"Calling {name}"
+
+
+def _empty_note(box: ToolBox) -> list[str]:
+    """The reason a result was empty, if there was one."""
+    return [box.last_empty_note] if box.last_empty_note else []
 
 
 def _add_usage(usage: TurnUsage, reported: dict[str, object]) -> None:

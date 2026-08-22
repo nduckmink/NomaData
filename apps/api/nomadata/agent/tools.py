@@ -287,6 +287,10 @@ class ToolBox:
         #: measure something and could not must not end with the model saying a
         #: number anyway, and this is how the runtime knows that happened.
         self.query_error: str | None = None
+        #: Why the last result was empty, in words meant for the reader. An
+        #: empty answer that does not say which kind of empty it is leaves them
+        #: unable to tell a quiet month from a broken question.
+        self.last_empty_note: str = ""
 
     async def run(self, name: str, arguments: dict[str, Any]) -> str:
         """Execute a tool call and return what the model should read back.
@@ -405,6 +409,77 @@ class ToolBox:
         wanted = normalise(name)
         return next((m for m in self._graph.metrics if normalise(m.name) == wanted), None)
 
+    async def _diagnose_empty(self, query: AnalyticalQuery) -> dict[str, Any]:
+        """Why a query returned nothing, said twice for two readers.
+
+        "No matching rows" answers three different situations with one sentence:
+        the period really was quiet, the filter names a value the column does
+        not hold, or the metric has never had data. Neither the reader nor the
+        agent can tell which — so the agent either reports a silence it does not
+        understand, or starts changing the period until something comes back,
+        which turns a correct answer into an invented one.
+
+        ``note`` is for the model and carries instructions; ``for_user`` is for
+        the person and carries only what happened. They were one string once,
+        and the reader was shown "Do NOT try other periods", which is advice
+        addressed to somebody else.
+        """
+        if query.time is not None:
+            widened = query.model_copy(update={"time": None})
+            if await self._has_rows(widened):
+                return {
+                    "empty_because": "period_has_no_rows",
+                    "note": (
+                        "Nothing in this period, but the same query over all of "
+                        "history does return rows — so the metric and the filters "
+                        "are fine and the period is genuinely quiet. That is the "
+                        "answer: report it. Do NOT try other periods until "
+                        "something comes back."
+                    ),
+                    "for_user": (
+                        "Không có dữ liệu trong kỳ này. Cùng câu hỏi trên toàn bộ "
+                        "lịch sử thì có dữ liệu, nên kỳ này thật sự không phát sinh."
+                    ),
+                }
+
+        if query.filters:
+            widened = query.model_copy(update={"filters": []})
+            if await self._has_rows(widened):
+                fields = ", ".join(f.field for f in query.filters)
+                return {
+                    "empty_because": "filter_excludes_everything",
+                    "note": (
+                        f"Nothing matches these filters ({fields}), but without "
+                        "them the query does return rows. Check the values with "
+                        "values_of — a filter written as 'Đã duyệt' against rows "
+                        "that say 'APPROVED' matches nothing — then run it again."
+                    ),
+                    "for_user": f"Không dòng nào khớp điều kiện lọc ({fields}).",
+                }
+
+        return {
+            "empty_because": "metric_has_no_data",
+            "note": (
+                "This metric returns nothing at all, with no period and no "
+                "filters. Nothing about the question is wrong; the data is not "
+                "there. Say so rather than looking for a number elsewhere."
+            ),
+            "for_user": "Metric này chưa có dữ liệu nào.",
+        }
+
+    async def _has_rows(self, query: AnalyticalQuery) -> bool:
+        """Whether a widened query finds anything.
+
+        A diagnosis is a courtesy: failing to produce one must not turn an empty
+        answer into an error.
+        """
+        try:
+            resolved = resolve(query, self._graph)
+            result = await self._engine.run(resolved, self._graph)
+        except Exception:  # noqa: BLE001 - the original answer stands either way
+            return False
+        return not _is_empty(result)
+
     # ------------------------------------------------------------------
     # values_of
     # ------------------------------------------------------------------
@@ -460,6 +535,7 @@ class ToolBox:
         result = await self._engine.run(resolved, self._graph)
 
         self.query_error = None
+        self.last_empty_note = ""
         self.last_query = query
         self.last_result = result
         self.last_notes = resolved.notes
@@ -470,6 +546,13 @@ class ToolBox:
             "rows": shown,
             "row_count": result.row_count,
         }
+        if _is_empty(result):
+            diagnosis = await self._diagnose_empty(query)
+            payload.update(diagnosis)
+            # Two audiences: the model is told what to do, the reader is told
+            # what happened. One string served both and the reader was shown
+            # instructions addressed to somebody else.
+            self.last_empty_note = str(diagnosis.pop("for_user", ""))
         if len(shown) < len(result.rows) or result.truncated:
             # Telling the model not to over-claim is not enough on its own: given
             # 50 of 200 rows it will say "the biggest is X", and X is only the
@@ -518,6 +601,23 @@ def _over_all_rows(result: QueryResult) -> dict[str, Any]:
 
 def _numeric(rows: list[dict[str, Any]], column: str) -> bool:
     return any(isinstance(row.get(column), int | float) for row in rows)
+
+
+def _is_empty(result: QueryResult) -> bool:
+    """No rows — or the one row an aggregate returns when it measured nothing.
+
+    ``SUM`` over an empty period does not come back as zero rows; it comes back
+    as a single row holding NULL. Reading emptiness as "no rows" therefore
+    missed the commonest empty answer there is, which is the one a question
+    about a recent period produces.
+    """
+    if not result.rows:
+        return True
+    if len(result.rows) > 1:
+        return False
+    measures = {c.name for c in result.columns}
+    values = [v for k, v in result.rows[0].items() if not measures or k in measures]
+    return bool(values) and all(v is None for v in values)
 
 
 def _metric_line(metric: MetricDefinition, by_key: dict[str, Entity]) -> str:

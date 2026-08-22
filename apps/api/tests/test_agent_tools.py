@@ -529,3 +529,129 @@ async def test_a_query_that_succeeds_after_a_failure_still_answers() -> None:
 
     assert turn.kind == "answer"
     assert turn.answer == "1284500000"
+
+
+# ----------------------------------------------------------------------
+# An empty result says which kind of empty it is
+# ----------------------------------------------------------------------
+
+
+class _EmptyUnless(FakeEngine):
+    """Returns nothing until the query is widened past what `narrow` names."""
+
+    def __init__(self, narrow: str) -> None:
+        super().__init__()
+        self._narrow = narrow
+
+    async def run(self, query: AnalyticalQuery, graph: SemanticGraph) -> QueryResult:
+        self.ran.append(query)
+        narrowed = query.time is not None if self._narrow == "time" else bool(query.filters)
+        if narrowed:
+            return QueryResult(columns=[], rows=[], row_count=0)
+        return QueryResult(
+            columns=[ResultColumn(name="hoc_phi.Hoc_phi_da_thu", data_type="")],
+            rows=[{"hoc_phi.Hoc_phi_da_thu": 42}],
+            row_count=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_quiet_period_is_told_apart_from_a_broken_question() -> None:
+    """ "No matching rows" answers three different situations with one sentence,
+    and the reader cannot tell which. This one is the answer, not a failure —
+    and saying so is what stops the agent trying periods until a number
+    appears."""
+    box = ToolBox(_graph(), _EmptyUnless("time"))
+
+    out = json.loads(
+        await box.run(
+            "run_query",
+            {"measures": ["Học phí đã thu"], "time": {"range": "this_month"}},
+        )
+    )
+
+    assert out["empty_because"] == "period_has_no_rows"
+    assert "Do NOT try other periods" in out["note"]
+    # The reader gets what happened; the instructions are for the model.
+    assert "Do NOT" not in out["for_user"]
+
+
+@pytest.mark.asyncio
+async def test_a_filter_that_matches_nothing_says_to_check_its_values() -> None:
+    box = ToolBox(_graph(), _EmptyUnless("filters"))
+
+    out = json.loads(
+        await box.run(
+            "run_query",
+            {
+                "measures": ["Học phí đã thu"],
+                "filters": [{"field": "Trạng thái", "operator": "eq", "value": "Đã duyệt"}],
+            },
+        )
+    )
+
+    assert out["empty_because"] == "filter_excludes_everything"
+    assert "values_of" in out["note"]
+
+
+@pytest.mark.asyncio
+async def test_a_metric_with_no_data_at_all_says_so_plainly() -> None:
+    """Nothing about the question is wrong; the data is not there."""
+    engine = FakeEngine(QueryResult(columns=[], rows=[], row_count=0))
+    box = ToolBox(_graph(), engine)
+
+    out = json.loads(await box.run("run_query", {"measures": ["Học phí đã thu"]}))
+
+    assert out["empty_because"] == "metric_has_no_data"
+
+
+@pytest.mark.asyncio
+async def test_the_reason_reaches_the_reader_too() -> None:
+    """The reader decides whether a quiet month is right, and cannot do that
+    from "no matching rows" alone."""
+    provider = ScriptedProvider(
+        [_call("run_query", measures=["Học phí đã thu"], time={"range": "this_month"})]
+    )
+
+    turn = await AgentRuntime(provider, _EmptyUnless("time")).answer("tháng này", _graph())
+
+    assert turn.kind == "answer"
+    assert any("kỳ này thật sự không phát sinh" in note for note in turn.notes)
+    # And not the sentence written for the model.
+    assert not any("Do NOT" in note for note in turn.notes)
+
+
+@pytest.mark.asyncio
+async def test_an_aggregate_over_nothing_counts_as_empty() -> None:
+    """SUM over an empty period does not return zero rows — it returns one row
+    holding NULL, which is the commonest empty answer there is and the one a
+    question about a recent period produces."""
+    engine = FakeEngine(
+        QueryResult(
+            columns=[ResultColumn(name="hoc_phi.Hoc_phi_da_thu", data_type="number")],
+            rows=[{"hoc_phi.Hoc_phi_da_thu": None}],
+            row_count=1,
+        )
+    )
+    box = ToolBox(_graph(), engine)
+
+    out = json.loads(await box.run("run_query", {"measures": ["Học phí đã thu"]}))
+
+    assert out["empty_because"] == "metric_has_no_data"
+
+
+@pytest.mark.asyncio
+async def test_a_real_zero_is_not_empty() -> None:
+    """Zero is an answer. Treating it as absence would explain away a fact."""
+    engine = FakeEngine(
+        QueryResult(
+            columns=[ResultColumn(name="hoc_phi.Hoc_phi_da_thu", data_type="number")],
+            rows=[{"hoc_phi.Hoc_phi_da_thu": 0}],
+            row_count=1,
+        )
+    )
+    box = ToolBox(_graph(), engine)
+
+    out = json.loads(await box.run("run_query", {"measures": ["Học phí đã thu"]}))
+
+    assert "empty_because" not in out
