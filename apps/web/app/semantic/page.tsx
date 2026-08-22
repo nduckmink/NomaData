@@ -15,6 +15,7 @@ import {
 import { toast } from "sonner"
 
 import {
+  buildPhase,
   getActiveJob,
   getAIConfig,
   type GenerationJob,
@@ -334,19 +335,17 @@ function RowActions({
 
 /** The row's live build progress — mirrors the editor panel's spinner + bar. */
 function BuildProgress({ job }: { job: GenerationJob }) {
-  const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : null
+  const phase = buildPhase(job)
   return (
     <div className="flex items-center justify-end gap-2.5">
       <RiLoader4Line className="size-4 shrink-0 animate-spin text-accent-brand" />
       <div className="flex flex-col items-end gap-1">
-        <span className="text-xs font-medium">
-          {pct !== null ? `Building… ${pct}%` : "Building…"}
-        </span>
-        {pct !== null && (
+        <span className="text-xs font-medium">{phase.label}</span>
+        {phase.percent !== null && (
           <div className="h-1 w-36 overflow-hidden rounded-full bg-border">
             <div
               className="h-full bg-accent-brand transition-[width] duration-300"
-              style={{ width: `${pct}%` }}
+              style={{ width: `${phase.percent}%` }}
             />
           </div>
         )}

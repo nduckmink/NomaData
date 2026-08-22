@@ -28,6 +28,7 @@ import {
   deleteSemantic,
   type Dimension,
   type Entity,
+  buildPhase,
   type GenerationJob,
   getActiveJob,
   getAIConfig,
@@ -103,8 +104,11 @@ const ACTION_FAILED = {
 function showError(title: string, error: unknown) {
   const text = error instanceof Error ? error.message : ""
   const [first, ...rest] = text.split("\n")
-  const description =
-    rest.length ? rest.join("\n") : first && first !== title ? first : undefined
+  const description = rest.length
+    ? rest.join("\n")
+    : first && first !== title
+      ? first
+      : undefined
   toast.error(rest.length ? first || title : title, {
     description,
     duration: rest.length ? 10_000 : undefined,
@@ -133,8 +137,12 @@ export function SemanticPanel({ source }: { source: string }) {
   // *which* rows are unsaved, instead of one flag saying that something is.
   const [saved, setSaved] = useState<SemanticGraph | null>(null)
   const [dirty, setDirty] = useState(false)
-  const [action, setAction] = useState<"save" | "publish" | "delete" | null>(null)
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
+  const [action, setAction] = useState<"save" | "publish" | "delete" | null>(
+    null
+  )
+  // The whole job, not two numbers: a build runs two stages with separate
+  // counters, and which stage it is in is the thing worth showing.
+  const [running, setRunning] = useState<GenerationJob | null>(null)
   const [aiConfigured, setAiConfigured] = useState(false)
   const [issues, setIssues] = useState<ValidationIssue[]>([])
   const [selEntity, setSelEntity] = useState(0)
@@ -190,7 +198,7 @@ export function SemanticPanel({ source }: { source: string }) {
       jobAbort.current = controller
       const signal = controller.signal
       setStatus("generating")
-      setProgress({ done: initial.done, total: initial.total })
+      setRunning(initial)
       let job = initial
       try {
         while (!signal.aborted) {
@@ -206,6 +214,15 @@ export function SemanticPanel({ source }: { source: string }) {
                 { description: job.last_batch_error ?? undefined }
               )
             }
+            // A column that could not be sampled is a column whose values the
+            // model never learns. It still works; it just knows less, and the
+            // filter picker for that column will come up empty.
+            if (job.unprofiled_columns > 0) {
+              toast.warning(
+                `${job.unprofiled_columns} of ${job.profile_total} columns could not be ` +
+                  "sampled, so their values are unknown."
+              )
+            }
             await load()
             return
           }
@@ -218,7 +235,7 @@ export function SemanticPanel({ source }: { source: string }) {
           if (signal.aborted) return
           job = await getJob(source, job.id, signal)
           if (signal.aborted) return
-          setProgress({ done: job.done, total: job.total })
+          setRunning(job)
         }
       } catch (e) {
         if (!signal.aborted) {
@@ -226,7 +243,7 @@ export function SemanticPanel({ source }: { source: string }) {
           await load()
         }
       } finally {
-        setProgress(null)
+        setRunning(null)
       }
     },
     [source, load]
@@ -258,7 +275,11 @@ export function SemanticPanel({ source }: { source: string }) {
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const report = await validateSemantic(source, graph, controller.signal)
+          const report = await validateSemantic(
+            source,
+            graph,
+            controller.signal
+          )
           if (!controller.signal.aborted) setIssues(report.issues)
         } catch {
           // Validation is advisory here; the publish call re-checks anyway.
@@ -309,7 +330,10 @@ export function SemanticPanel({ source }: { source: string }) {
       toast.success("Semantic model deleted")
     })
 
-  async function run(kind: NonNullable<typeof action>, fn: () => Promise<void>) {
+  async function run(
+    kind: NonNullable<typeof action>,
+    fn: () => Promise<void>
+  ) {
     setAction(kind)
     try {
       await fn()
@@ -317,7 +341,7 @@ export function SemanticPanel({ source }: { source: string }) {
       showError(ACTION_FAILED[kind], e)
     } finally {
       setAction(null)
-      setProgress(null)
+      setRunning(null)
     }
   }
 
@@ -365,7 +389,9 @@ export function SemanticPanel({ source }: { source: string }) {
       g
         ? {
             ...g,
-            metrics: g.metrics.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+            metrics: g.metrics.map((m) =>
+              m.id === id ? { ...m, ...patch } : m
+            ),
           }
         : g
     )
@@ -375,7 +401,10 @@ export function SemanticPanel({ source }: { source: string }) {
   const addMetric = () => {
     setGraph((g) => {
       if (!g) return g
-      return { ...g, metrics: [emptyMetric(g.entities[0]?.key ?? null), ...g.metrics] }
+      return {
+        ...g,
+        metrics: [emptyMetric(g.entities[0]?.key ?? null), ...g.metrics],
+      }
     })
     setSelMetric(0)
     setMetricQuery("")
@@ -396,7 +425,9 @@ export function SemanticPanel({ source }: { source: string }) {
   }
 
   const removeMetric = (id: string) => {
-    setGraph((g) => (g ? { ...g, metrics: g.metrics.filter((m) => m.id !== id) } : g))
+    setGraph((g) =>
+      g ? { ...g, metrics: g.metrics.filter((m) => m.id !== id) } : g
+    )
     setSelMetric((s) => Math.max(0, s - 1))
     setDirty(true)
   }
@@ -439,7 +470,9 @@ export function SemanticPanel({ source }: { source: string }) {
   )
   const metricNames = useMemo(
     () =>
-      [...new Set((graph?.metrics ?? []).map((m) => m.name).filter(Boolean))].sort(),
+      [
+        ...new Set((graph?.metrics ?? []).map((m) => m.name).filter(Boolean)),
+      ].sort(),
     [graph]
   )
 
@@ -464,22 +497,19 @@ export function SemanticPanel({ source }: { source: string }) {
   }
 
   if (status === "generating") {
-    const pct =
-      progress && progress.total > 0
-        ? Math.round((progress.done / progress.total) * 100)
-        : null
+    const phase = running
+      ? buildPhase(running)
+      : { label: "Building your model…", percent: null }
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 border bg-wash px-6 py-14 text-center">
         <RiLoader4Line className="size-6 animate-spin text-accent-brand" />
         <div className="flex flex-col items-center gap-2">
-          <span className="text-sm font-medium">
-            {pct !== null ? `Building your model… ${pct}%` : "Building your model…"}
-          </span>
-          {pct !== null && (
+          <span className="text-sm font-medium">{phase.label}</span>
+          {phase.percent !== null && (
             <div className="h-1.5 w-56 overflow-hidden rounded-full bg-border">
               <div
                 className="h-full bg-accent-brand transition-[width] duration-300"
-                style={{ width: `${pct}%` }}
+                style={{ width: `${phase.percent}%` }}
               />
             </div>
           )}
@@ -523,9 +553,15 @@ export function SemanticPanel({ source }: { source: string }) {
     matches(entityQuery, e.name, e.table)
   )
   const visibleMetrics = graph.metrics.filter((m) =>
-    matches(metricQuery, m.name, m.description ?? "", entityNames.get(m.entity_key ?? "") ?? "")
+    matches(
+      metricQuery,
+      m.name,
+      m.description ?? "",
+      entityNames.get(m.entity_key ?? "") ?? ""
+    )
   )
-  const entity = visibleEntities[Math.min(selEntity, visibleEntities.length - 1)]
+  const entity =
+    visibleEntities[Math.min(selEntity, visibleEntities.length - 1)]
   const metric = visibleMetrics[Math.min(selMetric, visibleMetrics.length - 1)]
 
   return (
@@ -540,7 +576,9 @@ export function SemanticPanel({ source }: { source: string }) {
           {dirty &&
             (() => {
               const n =
-                changes.entities.size + changes.metrics.size + changes.relationships
+                changes.entities.size +
+                changes.metrics.size +
+                changes.relationships
               return (
                 <span className="text-accent-brand">
                   {n || ""} unsaved change{n === 1 ? "" : "s"}
@@ -554,7 +592,11 @@ export function SemanticPanel({ source }: { source: string }) {
             mode="edit"
             aiConfigured={aiConfigured}
           >
-            <Button variant="ghost" size="sm" title="Tell the AI about this business">
+            <Button
+              variant="ghost"
+              size="sm"
+              title="Tell the AI about this business"
+            >
               <RiTranslate2 data-icon="inline-start" />
               Business context
             </Button>
@@ -579,7 +621,10 @@ export function SemanticPanel({ source }: { source: string }) {
             disabled={action !== null || !dirty}
           >
             {action === "save" ? (
-              <RiLoader4Line data-icon="inline-start" className="animate-spin" />
+              <RiLoader4Line
+                data-icon="inline-start"
+                className="animate-spin"
+              />
             ) : (
               <RiSaveLine data-icon="inline-start" />
             )}
@@ -594,17 +639,28 @@ export function SemanticPanel({ source }: { source: string }) {
             // screen — re-publishing an unchanged model would only bump the
             // version for no reason.
             nothingToPublish={graph.published && !dirty}
-            disabled={action !== null || errors.length > 0 || (graph.published && !dirty)}
+            disabled={
+              action !== null ||
+              errors.length > 0 ||
+              (graph.published && !dirty)
+            }
             onConfirm={publish}
           />
-          <DeleteButton onConfirm={remove} busy={action === "delete"} source={source} />
+          <DeleteButton
+            onConfirm={remove}
+            busy={action === "delete"}
+            source={source}
+          />
         </div>
       </div>
 
       <IssueBanner errors={errors} warnings={warnings} />
       <SkippedBanner skipped={graph.skipped_tables} />
 
-      <Tabs defaultValue="entities" className="flex min-h-0 flex-1 flex-col gap-3">
+      <Tabs
+        defaultValue="entities"
+        className="flex min-h-0 flex-1 flex-col gap-3"
+      >
         <TabsList>
           <TabsTrigger value="entities">
             <TabLabel
@@ -653,7 +709,10 @@ export function SemanticPanel({ source }: { source: string }) {
                   dirty: changes.entities.get(e.key) === "edited",
                   isNew: changes.entities.get(e.key) === "new",
                 }))}
-                selected={Math.min(selEntity, Math.max(0, visibleEntities.length - 1))}
+                selected={Math.min(
+                  selEntity,
+                  Math.max(0, visibleEntities.length - 1)
+                )}
                 onSelect={setSelEntity}
               />
             }
@@ -700,7 +759,10 @@ export function SemanticPanel({ source }: { source: string }) {
                   dirty: changes.metrics.get(m.id) === "edited",
                   isNew: changes.metrics.get(m.id) === "new",
                 }))}
-                selected={Math.min(selMetric, Math.max(0, visibleMetrics.length - 1))}
+                selected={Math.min(
+                  selMetric,
+                  Math.max(0, visibleMetrics.length - 1)
+                )}
                 onSelect={setSelMetric}
                 footer={
                   <Button
@@ -731,7 +793,10 @@ export function SemanticPanel({ source }: { source: string }) {
           </MasterDetail>
         </TabsContent>
 
-        <TabsContent value="relationships" className="flex min-h-0 flex-1 flex-col">
+        <TabsContent
+          value="relationships"
+          className="flex min-h-0 flex-1 flex-col"
+        >
           <RelationshipEditor
             source={source}
             entities={graph.entities}
@@ -839,36 +904,36 @@ function EntityEditor({
           {entity.provenance.origin === "user" && "Edited by you"}
         </span>
         <div className="flex items-center gap-2">
-        {aiConfigured && (
-          <SuggestMetricsButton
-            source={source}
-            entity={entity}
-            entities={entities}
-            existingNames={metricNames}
-            onAdd={onAddMetrics}
-          />
-        )}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() =>
-            onChange({
-              provenance: { ...entity.provenance, locked: !locked },
-            })
-          }
-          title={
-            locked
-              ? "Unlock — let AI improve this again"
-              : "Lock — keep this exactly as it is"
-          }
-        >
-          {locked ? (
-            <RiLockLine data-icon="inline-start" />
-          ) : (
-            <RiLockUnlockLine data-icon="inline-start" />
+          {aiConfigured && (
+            <SuggestMetricsButton
+              source={source}
+              entity={entity}
+              entities={entities}
+              existingNames={metricNames}
+              onAdd={onAddMetrics}
+            />
           )}
-          {locked ? "Locked" : "Lock"}
-        </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              onChange({
+                provenance: { ...entity.provenance, locked: !locked },
+              })
+            }
+            title={
+              locked
+                ? "Unlock — let AI improve this again"
+                : "Lock — keep this exactly as it is"
+            }
+          >
+            {locked ? (
+              <RiLockLine data-icon="inline-start" />
+            ) : (
+              <RiLockUnlockLine data-icon="inline-start" />
+            )}
+            {locked ? "Locked" : "Lock"}
+          </Button>
         </div>
       </div>
 
@@ -899,7 +964,10 @@ function EntityEditor({
           {entity.schema_name}.{entity.table}
         </ReadOnlyValue>
       </FormField>
-      <FormField label="What it is" highlighted={aiFields.includes("description")}>
+      <FormField
+        label="What it is"
+        highlighted={aiFields.includes("description")}
+      >
         <EditArea
           value={entity.description ?? ""}
           onChange={(v) => onChange({ description: v, provenance: USER })}
@@ -1021,7 +1089,11 @@ function IssueBanner({
   )
 }
 
-function SkippedBanner({ skipped }: { skipped: { table: string; reason: string }[] }) {
+function SkippedBanner({
+  skipped,
+}: {
+  skipped: { table: string; reason: string }[]
+}) {
   if (!skipped.length) return null
   return (
     <p className="border bg-wash p-2 text-xs text-muted-foreground">
@@ -1054,11 +1126,12 @@ function PublishButton({
   nothingToPublish?: boolean
   onConfirm: () => void
 }) {
-  const title = errors > 0
-    ? "Fix the problems above first"
-    : nothingToPublish
-      ? "Already published — nothing to publish"
-      : "Publish this model"
+  const title =
+    errors > 0
+      ? "Fix the problems above first"
+      : nothingToPublish
+        ? "Already published — nothing to publish"
+        : "Publish this model"
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>
@@ -1104,8 +1177,17 @@ function DeleteButton({
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>
-        <Button variant="ghost" size="sm" disabled={busy} aria-label="Delete semantic model">
-          {busy ? <RiLoader4Line className="animate-spin" /> : <RiDeleteBinLine />}
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          aria-label="Delete semantic model"
+        >
+          {busy ? (
+            <RiLoader4Line className="animate-spin" />
+          ) : (
+            <RiDeleteBinLine />
+          )}
         </Button>
       </AlertDialogTrigger>
       <AlertDialogContent>

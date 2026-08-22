@@ -429,6 +429,37 @@ export interface GenerationJob {
    *  kept their heuristic names — but "partly named" must not read as "named". */
   failed_batches: number
   last_batch_error?: string | null
+  /** Sampling each column's values, counted as it goes. A build that skipped
+   *  columns produces a model that never learns what they contain, and used to
+   *  say so only in a server log. */
+  profile_total: number
+  profiled_columns: number
+  unprofiled_columns: number
+}
+
+/** Which stage a running build is in, and how far through it is.
+ *
+ *  Two stages with separate counters: sampling column values runs to the end
+ *  before any naming starts, so one combined percentage would stall and then
+ *  jump. `null` percent means the stage has no count yet. */
+export function buildPhase(job: GenerationJob): {
+  label: string
+  percent: number | null
+} {
+  const seen = job.profiled_columns + job.unprofiled_columns
+  if (job.profile_total > 0 && seen < job.profile_total) {
+    return {
+      label: `Sampling column values… ${seen}/${job.profile_total}`,
+      percent: Math.round((seen / job.profile_total) * 100),
+    }
+  }
+  if (job.total > 0) {
+    return {
+      label: `Naming everything… ${job.done}/${job.total}`,
+      percent: Math.round((job.done / job.total) * 100),
+    }
+  }
+  return { label: "Building your model…", percent: null }
 }
 
 /** Start a background build (profile + heuristic + optional AI enrichment).
