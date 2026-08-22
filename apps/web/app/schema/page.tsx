@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import Link from "next/link"
 import {
   RiAddLine,
   RiArrowRightLine,
@@ -43,7 +44,6 @@ import { cn } from "@/lib/utils"
 import { DataSourceDialog } from "./data-source-dialogs"
 import { DataSourceSidebar } from "./data-source-sidebar"
 import { SchemaDiagram } from "./schema-diagram"
-import { SemanticPanel } from "./semantic-panel"
 
 /** One page of the table list. Matches the backend's default/cap. */
 const PAGE_SIZE = 40
@@ -57,7 +57,7 @@ const LOAD_MORE_THRESHOLD_PX = 160
 type ListStatus = "idle" | "loading" | "error" | "ready"
 
 export default function SchemaPage() {
-  const [tab, setTab] = useState<"schema" | "diagram" | "semantic">("schema")
+  const [tab, setTab] = useState<"schema" | "diagram">("schema")
 
   const [sourcesLoading, setSourcesLoading] = useState(true)
   const [sources, setSources] = useState<DataSourceInfo[]>([])
@@ -350,7 +350,7 @@ export default function SchemaPage() {
             <Tabs
               value={tab}
               onValueChange={(v) => {
-                const next = v as "schema" | "diagram" | "semantic"
+                const next = v as "schema" | "diagram"
                 setTab(next)
                 if (next === "diagram" && diagramStatus === "idle") {
                   setDiagramStatus("loading")
@@ -362,7 +362,6 @@ export default function SchemaPage() {
                 <TabsList>
                   <TabsTrigger value="schema">Schema</TabsTrigger>
                   <TabsTrigger value="diagram">Diagram</TabsTrigger>
-                  <TabsTrigger value="semantic">Semantic</TabsTrigger>
                 </TabsList>
                 {/* Always rendered (skeleton while empty) — swapping this in
                     and out of the tree was the whole page's height jump. */}
@@ -377,6 +376,16 @@ export default function SchemaPage() {
                       label="relationships"
                       value={tableTotals.relationships}
                     />
+                    {/* The model has its own page. This is a way to it, not a
+                        second copy of it — two editors on one model meant every
+                        change had to be kept in step in two places. */}
+                    <Link
+                      href={`/semantic/${encodeURIComponent(source)}`}
+                      className="inline-flex items-center gap-1 hover:text-foreground"
+                    >
+                      Semantic model
+                      <RiArrowRightLine className="size-4" />
+                    </Link>
                   </div>
                 )}
               </div>
@@ -505,15 +514,6 @@ export default function SchemaPage() {
                     }}
                   />
                 )}
-              </TabsContent>
-
-              <TabsContent
-                value="semantic"
-                className="flex min-h-0 flex-col md:min-h-0 md:flex-1"
-              >
-                {/* Keyed by source so switching sources remounts with a clean
-                    load instead of showing the previous source's model. */}
-                <SemanticPanel key={source} source={source} />
               </TabsContent>
             </Tabs>
           )}
