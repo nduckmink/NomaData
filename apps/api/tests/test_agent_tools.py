@@ -450,3 +450,23 @@ async def test_values_that_cannot_be_read_do_not_break_the_turn() -> None:
     out = await box.run("values_of", {"dimension": "Trạng thái"})
 
     assert "Could not read the values" in out
+
+
+@pytest.mark.asyncio
+async def test_the_trust_line_says_what_was_filtered_out() -> None:
+    """A filtered count and an unfiltered one produced the same sentence and
+    different numbers. The line exists so a reader can check the figure; it has
+    to mention the half of the query that changed it."""
+    provider = ScriptedProvider(
+        [
+            _call(
+                "run_query",
+                measures=["Học phí đã thu"],
+                filters=[{"field": "Trạng thái", "operator": "eq", "value": "COMPLETED"}],
+            )
+        ]
+    )
+
+    turn = await AgentRuntime(provider, FakeEngine()).answer("học phí đã thu", _graph())
+
+    assert turn.explanation.endswith("where Trạng thái eq COMPLETED.")

@@ -503,6 +503,14 @@ def explain(query: AnalyticalQuery, graph: SemanticGraph) -> str:
 
     if query.dimensions:
         text += f", sliced by {', '.join(query.dimensions)}"
+
+    # The filters the question added, not only the ones built into the metric.
+    # Without this a filtered count and an unfiltered one produce the same
+    # sentence and different numbers, and the line whose whole job is letting a
+    # reader check the figure says nothing about the half that changed it.
+    if query.filters:
+        conditions = ", ".join(f"{f.field} {f.operator} {f.value}" for f in query.filters)
+        text += f", where {conditions}"
     return text + "."
 
 

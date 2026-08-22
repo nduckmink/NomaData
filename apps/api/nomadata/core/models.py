@@ -1040,6 +1040,11 @@ class GenerationJob(BaseModel):
     # their heuristic names — but "partly named" must not read as "named".
     failed_batches: int = 0
     last_batch_error: str | None = None
+    # Columns whose values were sampled, and columns the time budget did not
+    # reach. A model built without them still works; it just knows less about
+    # what its own columns contain, and the reader has to be told which.
+    profiled_columns: int = 0
+    unprofiled_columns: int = 0
 
 
 class SemanticModelSummary(BaseModel):

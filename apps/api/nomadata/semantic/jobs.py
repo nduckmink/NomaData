@@ -10,8 +10,10 @@ are in-memory and ephemeral — fine for a single-process dev/app server.
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections.abc import Callable, Coroutine
+from itertools import zip_longest
 from typing import Any
 
 from nomadata.core.interfaces.data_source import DataSource
@@ -43,8 +45,14 @@ _Coro = Coroutine[Any, Any, None]
 #: plausibly be a dimension, only on the tables in scope, with limited
 #: concurrency so a build never hammers the user's production database.
 _PROFILE_CONCURRENCY = 4
-_MAX_PROFILED_COLUMNS = 400
 _PROFILE_TIMEOUT_S = 15.0
+
+#: What actually has to be bounded is how long the build spends here, not how
+#: many columns it looks at. A count is a guess about somebody else's database:
+#: 400 was fine until a source arrived with 1328 candidate columns, and the next
+#: number would be wrong again. A budget holds whatever the database turns out
+#: to be — a small one finishes everything, a large one gets the best of it.
+_PROFILE_BUDGET_S = 120.0
 
 #: How many fact-like entities a build proposes real metrics for. A count-only
 #: model is not worth reviewing; but suggesting for every table would explode
@@ -165,7 +173,7 @@ class SemanticJobRunner:
         previous = await self._semantic.get_draft(source_id) if keep_edits else None
         scope = tables or (previous.scope_tables if previous else None) or None
 
-        profiles = await profile_dimension_candidates(source, catalog, scope)
+        profiles = await profile_dimension_candidates(source, catalog, scope, job)
         provider = self._registry.active_provider()
         suggester = SemanticSuggester(provider)
         graph = suggester.heuristic(catalog, profiles=profiles, tables=scope, previous=previous)
@@ -319,6 +327,7 @@ async def profile_dimension_candidates(
     source: DataSource,
     catalog: DatabaseCatalog,
     tables: list[str] | None,
+    job: GenerationJob | None = None,
 ) -> dict[tuple[str, str], ColumnProfile]:
     """Profile candidate dimension columns, best-effort.
 
@@ -327,22 +336,18 @@ async def profile_dimension_candidates(
     the data type cannot make. Failures are skipped: profiling improves the
     draft, it must never block one.
     """
-    targets = _dimension_candidates(catalog, tables)
-    if len(targets) > _MAX_PROFILED_COLUMNS:
-        # Without a chosen scope this could be thousands of queries. Profile what
-        # fits and let the rest fall back to type-only classification.
-        log.info(
-            "semantic.profile.truncated",
-            total=len(targets),
-            profiled=_MAX_PROFILED_COLUMNS,
-        )
-        targets = targets[:_MAX_PROFILED_COLUMNS]
-
+    targets = _interleave_by_table(_dimension_candidates(catalog, tables))
     profiles: dict[tuple[str, str], ColumnProfile] = {}
     semaphore = asyncio.Semaphore(_PROFILE_CONCURRENCY)
+    deadline = time.monotonic() + _PROFILE_BUDGET_S
+    skipped = 0
 
     async def run(target: ProfileTarget) -> None:
+        nonlocal skipped
         async with semaphore:
+            if time.monotonic() > deadline:
+                skipped += 1
+                return
             try:
                 profile = await asyncio.wait_for(source.profile(target), timeout=_PROFILE_TIMEOUT_S)
             except Exception:  # noqa: BLE001 - a column we cannot profile is fine
@@ -350,4 +355,37 @@ async def profile_dimension_candidates(
             profiles[(target.table, target.column)] = profile
 
     await asyncio.gather(*[run(t) for t in targets])
+    if job is not None:
+        job.profiled_columns = len(profiles)
+        job.unprofiled_columns = skipped
+    if skipped:
+        # Somebody has to be told. This used to be a log line nobody read, and a
+        # model shipped knowing nothing about two thirds of its own tables.
+        log.warning(
+            "semantic.profile.budget_spent",
+            profiled=len(profiles),
+            skipped=skipped,
+            budget_s=_PROFILE_BUDGET_S,
+        )
     return profiles
+
+
+def _interleave_by_table(targets: list[ProfileTarget]) -> list[ProfileTarget]:
+    """One column from each table, then the next, and so on.
+
+    The catalogue comes ordered by table, so taking the list as it stands spends
+    everything on whatever sorts first: on the source this was found with, the
+    budget went entirely to ``category_*`` lookup tables and left ``transactions``
+    and ``enterprises`` — the two the metrics live on — with nothing at all.
+
+    Round-robin means running out of time costs every table its rarest columns
+    rather than costing some tables everything.
+    """
+    by_table: dict[str, list[ProfileTarget]] = {}
+    for target in targets:
+        by_table.setdefault(target.table, []).append(target)
+
+    ordered: list[ProfileTarget] = []
+    for row in zip_longest(*by_table.values()):
+        ordered.extend(t for t in row if t is not None)
+    return ordered
