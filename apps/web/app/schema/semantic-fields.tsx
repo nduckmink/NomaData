@@ -16,11 +16,17 @@ import type {
   Aggregation,
   Dimension,
   FilterOperator,
-  MetricKind,
   Provenance,
 } from "@/lib/api-client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
@@ -34,11 +40,6 @@ export const AGGREGATION_LABEL: Record<Aggregation, string> = {
   avg: "Average",
   min: "Smallest",
   max: "Largest",
-}
-
-export const METRIC_KIND_LABEL: Record<MetricKind, string> = {
-  base: "Measured from data",
-  derived: "Calculated from other metrics",
 }
 
 export const OPERATOR_LABEL: Record<FilterOperator, string> = {
@@ -187,8 +188,17 @@ export function EditArea({
   )
 }
 
-/** Lightweight native <select> — cheap enough for hundreds of rows, which a
- *  Radix Select would not be. */
+/** The one dropdown the model editor uses.
+ *
+ *  Was a native <select>, chosen because a Radix one seemed too heavy for a
+ *  form with a dozen of them. The cost was a control that ignored the theme
+ *  entirely: light popups over a dark page, a different typeface, and none of
+ *  the focus and hover states everything beside it has. One component, so
+ *  changing what it renders fixes every field at once.
+ *
+ *  A blank value is not a valid Radix item, so the placeholder is the trigger's
+ *  own placeholder rather than an option — which also stops "None" reading like
+ *  something you picked. */
 export function MiniSelect({
   value,
   onChange,
@@ -209,29 +219,44 @@ export function MiniSelect({
   highlighted?: boolean
 }) {
   const seen = new Set<string>()
-  const unique = options.filter((o) => !seen.has(o.value) && seen.add(o.value))
+  const unique = options.filter(
+    (o) => o.value !== "" && !seen.has(o.value) && seen.add(o.value)
+  )
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      aria-label={label}
-      data-empty={empty ? "true" : undefined}
-      className={cn(
-        "h-8 rounded-md border border-border/50 bg-transparent px-2 text-sm outline-none transition-colors hover:border-border focus-visible:border-border",
-        empty && "border-accent-brand/50 bg-accent-brand/5",
-        highlighted && "border-accent-brand bg-accent-brand/10",
-        className
-      )}
+    <Select
+      value={value || undefined}
+      onValueChange={(v) => onChange(v === CLEAR ? "" : v)}
     >
-      {placeholder !== undefined && <option value="">{placeholder}</option>}
-      {unique.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+      <SelectTrigger
+        aria-label={label}
+        data-empty={empty ? "true" : undefined}
+        className={cn(
+          "h-8",
+          empty && "border-accent-brand/50 bg-accent-brand/5",
+          highlighted && "border-accent-brand bg-accent-brand/10",
+          className
+        )}
+      >
+        <SelectValue placeholder={placeholder ?? "Choose…"} />
+      </SelectTrigger>
+      <SelectContent>
+        {/* Offered only when there is something to clear, so an optional field
+            can go back to empty without retyping the form. */}
+        {placeholder !== undefined && value !== "" && (
+          <SelectItem value={CLEAR}>{placeholder}</SelectItem>
+        )}
+        {unique.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }
+
+/** Radix refuses an empty item value, so clearing needs a value of its own. */
+const CLEAR = "__clear__"
 
 export interface MasterItem {
   key: string
@@ -323,7 +348,9 @@ export function MasterList({
           <li className="p-3 text-sm text-muted-foreground">Nothing here.</li>
         )}
       </ul>
-      {footer && <div className="shrink-0 border-t bg-background p-2">{footer}</div>}
+      {footer && (
+        <div className="shrink-0 border-t bg-background p-2">{footer}</div>
+      )}
     </div>
   )
 }
@@ -347,7 +374,9 @@ export function MasterDetail({
       <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[minmax(0,17rem)_1fr]">
         {list}
         <div className="min-h-0 overflow-y-auto">
-          <div className="flex max-w-2xl flex-col gap-4 pr-1 pb-4">{children}</div>
+          <div className="flex max-w-2xl flex-col gap-4 pr-1 pb-4">
+            {children}
+          </div>
         </div>
       </div>
     </div>
@@ -385,7 +414,10 @@ export function PromptBox({
   }
   return (
     <div className="flex flex-col gap-2 border border-accent-brand/30 bg-accent-brand/5 p-3">
-      <label htmlFor={id} className="flex items-center gap-1.5 text-xs font-medium">
+      <label
+        htmlFor={id}
+        className="flex items-center gap-1.5 text-xs font-medium"
+      >
         <RiSparkling2Line className="size-3.5 text-accent-brand" />
         {label}
       </label>
@@ -400,7 +432,12 @@ export function PromptBox({
           placeholder={placeholder}
           className="h-8 flex-1 rounded-md border border-border/50 bg-background px-2 text-sm outline-none focus-visible:border-border"
         />
-        <Button size="sm" variant="outline" onClick={submit} disabled={busy || !value.trim()}>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={submit}
+          disabled={busy || !value.trim()}
+        >
           {busy ? (
             <RiLoader4Line data-icon="inline-start" className="animate-spin" />
           ) : (
@@ -424,7 +461,9 @@ export function DraftNotes({
 }) {
   return (
     <>
-      {reasoning && <p className="text-xs text-muted-foreground italic">{reasoning}</p>}
+      {reasoning && (
+        <p className="text-xs text-muted-foreground italic">{reasoning}</p>
+      )}
       {warnings.length > 0 && (
         <ul className="flex flex-col gap-1 border border-amber-500/40 bg-amber-500/5 p-2 text-xs">
           {warnings.map((w) => (
@@ -435,7 +474,6 @@ export function DraftNotes({
     </>
   )
 }
-
 
 /** A tab label that says how much of what is behind it is unsaved.
 

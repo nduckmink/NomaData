@@ -22,7 +22,8 @@ import { cn } from "@/lib/utils"
 /** How many tables to tick by default when nothing was chosen before. */
 const DEFAULT_SELECTION = 15
 
-const NOISE = /(_log|_logs|_tmp|_temp|_bak|_backup|_archive|_history|_histories)$|^(sys_|tmp_)/i
+const NOISE =
+  /(_log|_logs|_tmp|_temp|_bak|_backup|_archive|_history|_histories)$|^(sys_|tmp_)/i
 const BUSINESS_WORDS =
   /(order|invoice|payment|transaction|contract|customer|client|enterprise|employee|student|product|sale|revenue|fee|account)/i
 const MONEY = /(amount|price|total|value|salary|fee|cost|balance|so_tien|tien)/i
@@ -44,7 +45,10 @@ export function rankTables(catalog: DatabaseCatalog): TableChoice[] {
   const incoming = new Map<string, number>()
   for (const table of catalog.tables) {
     for (const fk of table.foreign_keys) {
-      incoming.set(fk.references_table, (incoming.get(fk.references_table) ?? 0) + 1)
+      incoming.set(
+        fk.references_table,
+        (incoming.get(fk.references_table) ?? 0) + 1
+      )
     }
   }
 
@@ -53,14 +57,18 @@ export function rankTables(catalog: DatabaseCatalog): TableChoice[] {
       const referenced = incoming.get(table.name) ?? 0
       const hasDate = table.columns.some((c) => /date|time/i.test(c.data_type))
       const hasMoney = table.columns.some(
-        (c) => MONEY.test(c.name) && /int|dec|num|float|double|real|money/i.test(c.data_type)
+        (c) =>
+          MONEY.test(c.name) &&
+          /int|dec|num|float|double|real|money/i.test(c.data_type)
       )
       const reasons: string[] = []
       let score = 0
 
       if (referenced > 0) {
         score += Math.min(referenced, 10) * 3
-        reasons.push(`${referenced} table${referenced === 1 ? "" : "s"} link to it`)
+        reasons.push(
+          `${referenced} table${referenced === 1 ? "" : "s"} link to it`
+        )
       }
       if (hasDate && hasMoney) {
         score += 12
@@ -75,7 +83,8 @@ export function rankTables(catalog: DatabaseCatalog): TableChoice[] {
         score += 5
         reasons.push("business-sounding name")
       }
-      if (table.foreign_keys.length > 0) score += Math.min(table.foreign_keys.length, 5)
+      if (table.foreign_keys.length > 0)
+        score += Math.min(table.foreign_keys.length, 5)
       if (NOISE.test(table.name)) {
         score -= 25
         reasons.length = 0
@@ -184,13 +193,15 @@ export function TablePicker({
           </li>
         ))}
         {visible.length === 0 && (
-          <li className="p-3 text-sm text-muted-foreground">No table matches.</li>
+          <li className="p-3 text-sm text-muted-foreground">
+            No table matches.
+          </li>
         )}
       </ul>
 
       <p className="text-xs text-muted-foreground">
-        Only the tables you tick become part of the model. You can add more later
-        with Rebuild — anything you already edited is kept.
+        Only the tables you tick become part of the model. You can add more
+        later with Rebuild — anything you already edited is kept.
       </p>
     </div>
   )

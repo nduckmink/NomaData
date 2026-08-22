@@ -70,7 +70,9 @@ export function SuggestMetricsButton({
         setWarnings(result.warnings)
         setChosen(new Set(result.metrics.map((m) => m.id)))
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Could not suggest metrics")
+        toast.error(
+          e instanceof Error ? e.message : "Could not suggest metrics"
+        )
         setOpen(false)
       } finally {
         setLoading(false)

@@ -14,7 +14,12 @@
  */
 
 import { useState } from "react"
-import { RiAddLine, RiDeleteBinLine, RiLoader4Line, RiSearchLine } from "@remixicon/react"
+import {
+  RiAddLine,
+  RiDeleteBinLine,
+  RiLoader4Line,
+  RiSearchLine,
+} from "@remixicon/react"
 import { toast } from "sonner"
 
 import {
@@ -72,7 +77,9 @@ export function RelationshipEditor({
   }
 
   const update = (index: number, patch: Partial<Relationship>) =>
-    onChange(relationships.map((r, i) => (i === index ? { ...r, ...patch } : r)))
+    onChange(
+      relationships.map((r, i) => (i === index ? { ...r, ...patch } : r))
+    )
 
   const add = () => {
     const first = entities[0]
@@ -119,13 +126,21 @@ export function RelationshipEditor({
         <div className="ml-auto flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={find} disabled={finding}>
             {finding ? (
-              <RiLoader4Line data-icon="inline-start" className="animate-spin" />
+              <RiLoader4Line
+                data-icon="inline-start"
+                className="animate-spin"
+              />
             ) : (
               <RiSearchLine data-icon="inline-start" />
             )}
             Find missing links
           </Button>
-          <Button variant="outline" size="sm" onClick={add} disabled={!entities.length}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={add}
+            disabled={!entities.length}
+          >
             <RiAddLine data-icon="inline-start" />
             Add link
           </Button>
@@ -148,96 +163,101 @@ export function RelationshipEditor({
             {relationships.map((r, i) => {
               const isNew = !savedSignatures.has(relSignature(r))
               return (
-              <TableRow
-                key={`${r.from_entity_key}-${r.from_column}-${r.to_entity_key}-${i}`}
-                className={cn(isNew && "bg-accent-brand/5")}
-              >
-                <TableCell>
-                  <span className="flex items-center gap-2">
-                    <span
-                      className={cn(
-                        "size-1.5 shrink-0 rounded-full",
-                        isNew ? "bg-accent-brand" : "bg-transparent"
-                      )}
-                      title={isNew ? "Unsaved" : undefined}
-                    />
+                <TableRow
+                  key={`${r.from_entity_key}-${r.from_column}-${r.to_entity_key}-${i}`}
+                  className={cn(isNew && "bg-accent-brand/5")}
+                >
+                  <TableCell>
+                    <span className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "size-1.5 shrink-0 rounded-full",
+                          isNew ? "bg-accent-brand" : "bg-transparent"
+                        )}
+                        title={isNew ? "Unsaved" : undefined}
+                      />
+                      <MiniSelect
+                        value={r.from_entity_key}
+                        onChange={(v) =>
+                          update(i, {
+                            from_entity_key: v,
+                            from_column: byKey.get(v)?.primary_key ?? "",
+                          })
+                        }
+                        label="From entity"
+                        options={entityOptions}
+                        className="w-full"
+                      />
+                    </span>
+                  </TableCell>
+                  <TableCell>
                     <MiniSelect
-                      value={r.from_entity_key}
+                      value={r.from_column}
+                      onChange={(v) => update(i, { from_column: v })}
+                      label="From column"
+                      options={columnsOf(r.from_entity_key).map((c) => ({
+                        value: c,
+                        label: c,
+                      }))}
+                      className="w-full"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <MiniSelect
+                      value={r.to_entity_key}
                       onChange={(v) =>
                         update(i, {
-                          from_entity_key: v,
-                          from_column: byKey.get(v)?.primary_key ?? "",
+                          to_entity_key: v,
+                          to_column: byKey.get(v)?.primary_key ?? "",
                         })
                       }
-                      label="From entity"
+                      label="To entity"
                       options={entityOptions}
                       className="w-full"
                     />
-                  </span>
-                </TableCell>
-                <TableCell>
-                  <MiniSelect
-                    value={r.from_column}
-                    onChange={(v) => update(i, { from_column: v })}
-                    label="From column"
-                    options={columnsOf(r.from_entity_key).map((c) => ({
-                      value: c,
-                      label: c,
-                    }))}
-                    className="w-full"
-                  />
-                </TableCell>
-                <TableCell>
-                  <MiniSelect
-                    value={r.to_entity_key}
-                    onChange={(v) =>
-                      update(i, {
-                        to_entity_key: v,
-                        to_column: byKey.get(v)?.primary_key ?? "",
-                      })
-                    }
-                    label="To entity"
-                    options={entityOptions}
-                    className="w-full"
-                  />
-                </TableCell>
-                <TableCell>
-                  <MiniSelect
-                    value={r.to_column}
-                    onChange={(v) => update(i, { to_column: v })}
-                    label="To column"
-                    options={columnsOf(r.to_entity_key).map((c) => ({
-                      value: c,
-                      label: c,
-                    }))}
-                    className="w-full"
-                  />
-                </TableCell>
-                <TableCell>
-                  <MiniSelect
-                    value={r.kind}
-                    onChange={(v) => update(i, { kind: v })}
-                    label="Link kind"
-                    options={KINDS}
-                    className="w-full"
-                  />
-                </TableCell>
-                <TableCell>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label="Remove link"
-                    onClick={() => onChange(relationships.filter((_, j) => j !== i))}
-                  >
-                    <RiDeleteBinLine />
-                  </Button>
-                </TableCell>
-              </TableRow>
+                  </TableCell>
+                  <TableCell>
+                    <MiniSelect
+                      value={r.to_column}
+                      onChange={(v) => update(i, { to_column: v })}
+                      label="To column"
+                      options={columnsOf(r.to_entity_key).map((c) => ({
+                        value: c,
+                        label: c,
+                      }))}
+                      className="w-full"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <MiniSelect
+                      value={r.kind}
+                      onChange={(v) => update(i, { kind: v })}
+                      label="Link kind"
+                      options={KINDS}
+                      className="w-full"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Remove link"
+                      onClick={() =>
+                        onChange(relationships.filter((_, j) => j !== i))
+                      }
+                    >
+                      <RiDeleteBinLine />
+                    </Button>
+                  </TableCell>
+                </TableRow>
               )
             })}
             {relationships.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-sm text-muted-foreground">
+                <TableCell
+                  colSpan={6}
+                  className="text-sm text-muted-foreground"
+                >
                   No links yet. This source may not declare foreign keys — try
                   “Find missing links”.
                 </TableCell>

@@ -102,7 +102,7 @@ export function DataSourceSidebar({
                   </button>
                   {/* Revealed on hover / keyboard focus — no need to select the
                       row first. Kept in the DOM so hover works on any row. */}
-                  <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+                  <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
                     <DataSourceDialog
                       mode="edit"
                       name={s.name}

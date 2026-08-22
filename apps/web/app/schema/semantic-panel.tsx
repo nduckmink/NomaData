@@ -784,7 +784,7 @@ export function SemanticPanel({ source }: { source: string }) {
                 source={source}
                 metric={metric}
                 entities={graph.entities}
-                metricNames={metricNames}
+                metrics={graph?.metrics ?? []}
                 aiConfigured={aiConfigured}
                 onChange={(patch) => editMetric(metric.id, patch)}
                 onDelete={() => removeMetric(metric.id)}

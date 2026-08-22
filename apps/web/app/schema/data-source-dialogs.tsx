@@ -479,7 +479,7 @@ export function DataSourceDialog({
 
                 <div
                   aria-hidden
-                  className="rule-fade my-1 h-px"
+                  className="my-1 h-px rule-fade"
                   role="separator"
                 />
 
@@ -495,8 +495,8 @@ export function DataSourceDialog({
                     className="font-mono"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Paste a full URI, or fill the fields below — each mirrors the
-                    other.
+                    Paste a full URI, or fill the fields below — each mirrors
+                    the other.
                   </p>
                 </Field>
                 <div className="flex gap-3">
