@@ -29,6 +29,7 @@ from nomadata.core.models import (
     Message,
     MetricDefinition,
     MetricKind,
+    MetricSuggestRequest,
     ProviderCapabilities,
     SemanticGraph,
     ToolCallResponse,
@@ -147,7 +148,7 @@ async def test_a_formula_naming_something_this_entity_lacks_is_dropped() -> None
     result = await MetricSuggester(provider).suggest_derived(ORDERS, _graph())
 
     assert result.metrics == []
-    assert "does not have" in result.warnings[0]
+    assert "this table does not have" in result.warnings[0]
 
 
 @pytest.mark.asyncio
@@ -215,3 +216,54 @@ async def test_a_ratio_already_defined_is_not_proposed_twice() -> None:
     result = await MetricSuggester(provider).suggest_derived(ORDERS, _graph(existing))
 
     assert result.metrics == []
+
+
+# ----------------------------------------------------------------------
+# The same guard, wherever the proposal came from
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_base_pass_cannot_smuggle_a_cross_table_formula() -> None:
+    """This pass is asked for metrics over an entity's columns, and every guard
+    in it tested `kind == base` — so a model that answered with a formula walked
+    straight through. That is how a ratio spanning two tables reached a
+    published model, where Cube compiles it to nothing and nobody is told."""
+    provider = _Provider(
+        [
+            {
+                "name": "Quy mô nợ quá hạn trung bình",
+                "kind": "derived",
+                "expression": "Tổng tiền nợ quá hạn / Số hồ sơ đã duyệt",
+                "description": "…",
+            }
+        ]
+    )
+
+    result = await MetricSuggester(provider).suggest(
+        MetricSuggestRequest(entity_key=ORDERS), _graph()
+    )
+
+    assert result.metrics == []
+    assert "does not have" in result.warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_the_base_pass_keeps_a_formula_that_is_sound() -> None:
+    """The guard is about what a formula names, not about which pass wrote it."""
+    provider = _Provider(
+        [
+            {
+                "name": "Giá trị đơn hàng bình quân",
+                "kind": "derived",
+                "expression": "Tổng doanh thu / Số đơn hàng",
+                "description": "…",
+            }
+        ]
+    )
+
+    result = await MetricSuggester(provider).suggest(
+        MetricSuggestRequest(entity_key=ORDERS), _graph()
+    )
+
+    assert [m.name for m in result.metrics] == ["Giá trị đơn hàng bình quân"]

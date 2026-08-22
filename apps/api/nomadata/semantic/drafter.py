@@ -540,6 +540,34 @@ _SUGGEST_SYSTEM = (
 )
 
 
+def _derived_problem(metric: MetricDefinition, entity_key: str, graph: SemanticGraph) -> str | None:
+    """Why this formula cannot ship, or ``None`` if it can.
+
+    Cube builds a calculated measure inside one cube, so a formula naming a
+    metric from another table compiles to nothing: it lands in the model, the
+    query layer never sees it, and nobody is told. That makes an unchecked
+    derived proposal worse than a rejected one — it looks like a metric the
+    whole way to the person asking a question it cannot answer.
+    """
+    expression = (metric.expression or "").strip()
+    if not expression:
+        return "it has no formula"
+
+    known = {
+        m.name
+        for m in graph.metrics
+        if m.entity_key == entity_key and m.kind == MetricKind.base and m.name.strip()
+    }
+    # Closure first: a formula with one real name and one invented one fails
+    # both checks, and "names something this table does not have" is the half
+    # that tells the reader what to fix.
+    if not _expression_is_closed(expression, known):
+        return "its formula names something this table does not have"
+    if len(_referenced_names(expression, known)) < 2:
+        return "its formula combines fewer than two metrics of this table"
+    return None
+
+
 def _referenced_names(expression: str, known: set[str]) -> set[str]:
     """Which of ``known`` a formula mentions, longest first.
 
@@ -662,7 +690,6 @@ class MetricSuggester:
         reasons: list[str] = []
         warnings: list[str] = []
         seen = {_recipe(m) for m in existing}
-        known = {m.name for m in base}
 
         for raw in proposals.metrics[:limit]:
             proposal = raw.model_copy(update={"kind": "derived", "entity_key": entity_key})
@@ -677,13 +704,9 @@ class MetricSuggester:
             if not metric.name.strip() or not expression:
                 warnings.append("Skipped a ratio with no name or no expression.")
                 continue
-            if len(_referenced_names(expression, known)) < 2 or not _expression_is_closed(
-                expression, known
-            ):
-                warnings.append(
-                    f"Skipped {metric.name!r}: its formula names something this entity "
-                    "does not have, or combines nothing."
-                )
+            problem = _derived_problem(metric, entity_key, graph)
+            if problem is not None:
+                warnings.append(f"Skipped {metric.name!r}: {problem}.")
                 continue
             recipe = _recipe(metric)
             if recipe in seen:
@@ -749,6 +772,16 @@ class MetricSuggester:
             ):
                 warnings.append(f"Skipped {metric.name!r}: {'; '.join(drafted.warnings)}")
                 continue
+            # This pass is asked for metrics over an entity's *columns*, but
+            # nothing stops a model answering with a formula, and until now
+            # nothing checked one either — every guard here tested `kind ==
+            # base`. That is how a ratio spanning two tables reached a published
+            # model, where it compiles to nothing and is quietly absent.
+            if metric.kind == MetricKind.derived:
+                problem = _derived_problem(metric, entity.key, graph)
+                if problem is not None:
+                    warnings.append(f"Skipped {metric.name!r}: {problem}.")
+                    continue
             recipe = _recipe(metric)
             if recipe in seen:
                 continue  # the model repeated something already on the entity
