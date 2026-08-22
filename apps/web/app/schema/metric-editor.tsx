@@ -40,6 +40,12 @@ import {
   previewMetric,
 } from "@/lib/api-client"
 import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
 import {
@@ -75,6 +81,7 @@ export function MetricEditor({
   aiConfigured,
   onChange,
   onDelete,
+  onOpenMetric,
 }: {
   source: string
   metric: MetricDefinition
@@ -83,6 +90,9 @@ export function MetricEditor({
   aiConfigured: boolean
   onChange: (patch: Partial<MetricDefinition>) => void
   onDelete: () => void
+  /** Jump to another metric — a formula names them, and the first thing anyone
+   *  wants is to see what one of them actually is. */
+  onOpenMetric?: (metricId: string) => void
 }) {
   const [drafting, setDrafting] = useState(false)
   // Which fields the last AI pass touched — highlighted so the user knows
@@ -207,6 +217,7 @@ export function MetricEditor({
           selfName={metric.name}
           highlighted={touched("expression")}
           onChange={(v) => edit({ expression: v })}
+          onOpenMetric={onOpenMetric}
         />
       ) : (
         <>
@@ -408,6 +419,7 @@ function FormulaEditor({
   selfName,
   highlighted,
   onChange,
+  onOpenMetric,
 }: {
   expression: string
   metrics: MetricDefinition[]
@@ -415,6 +427,7 @@ function FormulaEditor({
   selfName: string
   highlighted?: boolean
   onChange: (v: string) => void
+  onOpenMetric?: (metricId: string) => void
 }) {
   const [asText, setAsText] = useState(false)
 
@@ -456,10 +469,7 @@ function FormulaEditor({
     )
 
   return (
-    <FormField
-      label="Formula"
-      highlighted={highlighted}
-    >
+    <FormField label="Formula" highlighted={highlighted}>
       {asText ? (
         <EditCell
           value={expression}
@@ -485,20 +495,28 @@ function FormulaEditor({
           )}
           {tokens.map((token, i) =>
             token.kind === "metric" ? (
-              <button
+              <FormulaChip
                 key={`${token.text}-${i}`}
+                name={token.text}
+                metric={usable.find((m) => m.name === token.text)}
+                entities={entities}
+                onRemove={() => removeAt(i)}
+                onOpen={onOpenMetric}
+              />
+            ) : (
+              // Operators come out the same way they went in. They used to have
+              // no affordance at all, so a mistyped "+" could only be undone by
+              // switching to text — which is the mode this editor exists to
+              // avoid needing.
+              <button
+                key={`op-${i}`}
                 type="button"
                 onClick={() => removeAt(i)}
                 title="Remove"
-                className="inline-flex items-center gap-1 rounded-sm bg-accent-brand/15 px-1.5 py-0.5 text-xs text-foreground hover:bg-destructive/15"
+                className="rounded-sm px-1 font-mono text-sm hover:bg-destructive/15"
               >
                 {token.text}
-                <RiCloseLine className="size-3 opacity-60" />
               </button>
-            ) : (
-              <span key={`op-${i}`} className="px-0.5 font-mono text-sm">
-                {token.text}
-              </span>
             )
           )}
         </div>
@@ -555,6 +573,67 @@ function FormulaEditor({
         </p>
       ) : null}
     </FormField>
+  )
+}
+
+/** One metric inside a formula.
+ *
+ *  Two things to do with it and two places to do them: the × takes it out of
+ *  the formula, and the name itself opens that metric — because the question a
+ *  formula raises is "what is that one, exactly", and the answer was three
+ *  clicks and a search away. Hovering says how it is calculated, which is
+ *  usually enough not to need the trip.
+ */
+function FormulaChip({
+  name,
+  metric,
+  entities,
+  onRemove,
+  onOpen,
+}: {
+  name: string
+  metric?: MetricDefinition
+  entities: Entity[]
+  onRemove: () => void
+  onOpen?: (metricId: string) => void
+}) {
+  const chip = (
+    <span className="inline-flex items-center gap-1 rounded-sm bg-accent-brand/15 pr-1 text-xs">
+      <button
+        type="button"
+        disabled={!metric || !onOpen}
+        onClick={() => metric && onOpen?.(metric.id)}
+        className="rounded-sm py-0.5 pl-1.5 enabled:hover:underline"
+      >
+        {name}
+      </button>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${name}`}
+        title="Remove"
+        className="rounded-sm p-0.5 opacity-60 hover:bg-destructive/25 hover:opacity-100"
+      >
+        <RiCloseLine className="size-3" />
+      </button>
+    </span>
+  )
+
+  if (!metric) return chip
+
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>{chip}</TooltipTrigger>
+        <TooltipContent className="max-w-sm">
+          <div className="flex flex-col gap-1">
+            <p className="font-medium">{name}</p>
+            <p className="font-mono">{formulaLine(metric, entities)}</p>
+            {metric.description && <p>{metric.description}</p>}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 

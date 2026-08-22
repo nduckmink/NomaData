@@ -582,6 +582,21 @@ export function SemanticPanel({ source }: { source: string }) {
   )
   const entity =
     visibleEntities[Math.min(selEntity, visibleEntities.length - 1)]
+  // Jumping to a metric named in a formula. It may be filtered out of the
+  // list by the search box, so the search is cleared rather than leaving the
+  // click doing nothing visible.
+  const openMetric = (id: string) => {
+    const inList = visibleMetrics.findIndex((m) => m.id === id)
+    if (inList >= 0) {
+      setSelMetric(inList)
+      return
+    }
+    const all = (graph?.metrics ?? []).findIndex((m) => m.id === id)
+    if (all < 0) return
+    setMetricQuery("")
+    setSelMetric(all)
+  }
+
   const metric = visibleMetrics[Math.min(selMetric, visibleMetrics.length - 1)]
 
   return (
@@ -818,6 +833,7 @@ export function SemanticPanel({ source }: { source: string }) {
                 aiConfigured={aiConfigured}
                 onChange={(patch) => editMetric(metric.id, patch)}
                 onDelete={() => removeMetric(metric.id)}
+                onOpenMetric={openMetric}
               />
             )}
           </MasterDetail>
