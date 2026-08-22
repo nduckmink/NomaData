@@ -29,6 +29,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
+from nomadata.core.formula import referenced_metrics
 from nomadata.core.models import (
     VALUELESS_OPERATORS,
     Aggregation,
@@ -134,21 +135,6 @@ def _sql_table(table: str, schema_name: str) -> str:
     return table
 
 
-def _referenced_metrics(expression: str, names: list[str]) -> list[str]:
-    """Which metric names a formula mentions.
-
-    Longest first, so ``Revenue`` does not match inside ``Net Revenue`` and
-    leave a dangling fragment behind.
-    """
-    found: list[str] = []
-    remaining = expression
-    for candidate in sorted(names, key=len, reverse=True):
-        if candidate and candidate in remaining:
-            found.append(candidate)
-            remaining = remaining.replace(candidate, " ")
-    return found
-
-
 def _derived_sql(expression: str, measure_names: dict[str, str]) -> str:
     """Rewrite a business formula into Cube's ``{measure}`` references.
 
@@ -217,7 +203,7 @@ def _derived_by_entity(
     for m in graph.metrics:
         if m.kind != MetricKind.derived or not (m.expression or "").strip():
             continue
-        owners = {base_names[p] for p in _referenced_metrics(m.expression or "", list(base_names))}
+        owners = {base_names[p] for p in referenced_metrics(m.expression or "", list(base_names))}
         if len(owners) == 1:
             grouped.setdefault(owners.pop() or "", []).append(m)
     return grouped

@@ -1167,10 +1167,16 @@ function ModelNotes({
                 row, so a heading beside a list became two narrow columns. */}
             <TooltipContent className="max-w-sm">
               <div className="flex flex-col gap-1">
+                {/* Both counts: the badge adds them up, so a heading that
+                    named only one made the two numbers look like a mistake. */}
                 <p className="font-medium">
-                  {errors.length > 0
-                    ? `${errors.length} problem(s) block publishing`
-                    : `${warnings.length} thing(s) worth checking`}
+                  {[
+                    errors.length > 0 &&
+                      `${errors.length} problem${errors.length === 1 ? "" : "s"} block publishing`,
+                    warnings.length > 0 && `${warnings.length} worth checking`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </p>
                 <ul className="flex flex-col gap-0.5">
                   {issues.slice(0, 6).map((issue, i) => (

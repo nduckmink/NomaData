@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 
+from nomadata.core.formula import leftovers
 from nomadata.core.models import (
     Aggregation,
     DatabaseCatalog,
@@ -359,11 +360,11 @@ def _check_derived(
             )
         )
         return
-    unknown = [
-        token.strip()
-        for token in _NAME_TOKEN.findall(expression)
-        if token.strip() and token.strip() not in metric_names
-    ]
+    # The same reading the compiler does. A character-level tokeniser used to
+    # live here, and it split a metric name at a bracket and called half of it
+    # unknown — so a model was publishable or broken depending on which parser
+    # you asked.
+    unknown = leftovers(expression, metric_names)
     for name in unknown:
         issues.append(
             _issue(

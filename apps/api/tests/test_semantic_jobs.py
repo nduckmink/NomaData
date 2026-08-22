@@ -176,8 +176,9 @@ def test_a_duplicate_metric_name_is_broken_by_its_table() -> None:
     names = [m.name for m in _unique_metric_names(graph).metrics]
 
     # The first keeps the plain name: renaming both would leave every reader
-    # wondering what the other one is.
-    assert names == ["Tổng phí sau thuế", "Tổng phí sau thuế (Thông báo)"]
+    # wondering what the other one is. Broken by the table, not by the entity
+    # name — an entity name can be a duplicate itself.
+    assert names == ["Tổng phí sau thuế", "Tổng phí sau thuế — notices"]
 
 
 def test_names_that_are_already_distinct_are_left_alone() -> None:
@@ -208,3 +209,65 @@ def test_names_that_are_already_distinct_are_left_alone() -> None:
         "Tổng phí",
         "Số phí",
     ]
+
+
+def test_two_entities_the_ai_gave_one_name_are_told_apart() -> None:
+    """The heuristic names an entity after its table, so it cannot collide. The
+    AI pass runs in parallel batches, so the batch naming `contracts` cannot
+    know what the batch naming `enterprise_contracts` chose — and both are
+    reasonably called "Hợp đồng doanh nghiệp". No prompt fixes that; seeing the
+    whole model at once is what batching gives up."""
+    from nomadata.core.models import Aggregation, MetricKind
+    from nomadata.semantic.jobs import _unique_entity_names
+
+    a = _entity_with("s.contracts", "contracts", [("x", "number")])
+    b = _entity_with("s.enterprise_contracts", "enterprise_contracts", [("x", "number")])
+    named = "Hợp đồng doanh nghiệp"
+    graph = SemanticGraph(
+        source_id="s",
+        entities=[
+            a.model_copy(update={"name": named}),
+            b.model_copy(update={"name": named}),
+        ],
+        metrics=[
+            MetricDefinition(
+                name=f"{named} Count",
+                kind=MetricKind.base,
+                entity_key="s.contracts",
+                aggregation=Aggregation.count,
+            ),
+            MetricDefinition(
+                name=f"{named} Count",
+                kind=MetricKind.base,
+                entity_key="s.enterprise_contracts",
+                aggregation=Aggregation.count,
+            ),
+        ],
+    )
+
+    out = _unique_entity_names(graph)
+
+    assert [e.name for e in out.entities] == [
+        named,
+        f"{named} — enterprise_contracts",
+    ]
+    # The default count label follows its entity, or the list shows a metric
+    # named after something no longer called that.
+    assert [m.name for m in out.metrics] == [
+        f"{named} Count",
+        f"{named} — enterprise_contracts Count",
+    ]
+
+
+def test_entities_already_distinct_are_left_alone() -> None:
+    from nomadata.semantic.jobs import _unique_entity_names
+
+    graph = SemanticGraph(
+        source_id="s",
+        entities=[
+            _entity_with("s.a", "a", [("x", "number")]),
+            _entity_with("s.b", "b", [("x", "number")]),
+        ],
+    )
+
+    assert _unique_entity_names(graph) is graph

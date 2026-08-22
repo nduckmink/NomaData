@@ -21,6 +21,7 @@ import re
 from typing import Any
 from uuid import uuid4
 
+from nomadata.core.formula import is_closed, referenced_metrics
 from nomadata.core.interfaces.ai_provider import AIProvider
 from nomadata.core.models import (
     FILTER_OPERATORS,
@@ -561,38 +562,11 @@ def _derived_problem(metric: MetricDefinition, entity_key: str, graph: SemanticG
     # Closure first: a formula with one real name and one invented one fails
     # both checks, and "names something this table does not have" is the half
     # that tells the reader what to fix.
-    if not _expression_is_closed(expression, known):
+    if not is_closed(expression, known):
         return "its formula names something this table does not have"
-    if len(_referenced_names(expression, known)) < 2:
+    if len(referenced_metrics(expression, known)) < 2:
         return "its formula combines fewer than two metrics of this table"
     return None
-
-
-def _referenced_names(expression: str, known: set[str]) -> set[str]:
-    """Which of ``known`` a formula mentions, longest first.
-
-    Longest first so ``Doanh thu`` does not match inside ``Doanh thu thuần`` and
-    leave a fragment behind that then resolves to nothing.
-    """
-    found: set[str] = set()
-    remaining = expression
-    for candidate in sorted(known, key=len, reverse=True):
-        if candidate and candidate in remaining:
-            found.add(candidate)
-            remaining = remaining.replace(candidate, " ")
-    return found
-
-
-def _expression_is_closed(expression: str, known: set[str]) -> bool:
-    """True when a formula holds nothing but the metrics it may name and
-    arithmetic. A leftover word is a metric this entity does not have; Cube
-    compiles that to nothing, so it would ship as a metric that is simply
-    absent from the model rather than as an error anybody sees."""
-    remaining = expression
-    for candidate in sorted(known, key=len, reverse=True):
-        if candidate:
-            remaining = remaining.replace(candidate, " ")
-    return not set(remaining.strip()) - set("+-*/(). 0123456789")
 
 
 _DERIVE_SYSTEM = (

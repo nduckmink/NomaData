@@ -188,6 +188,9 @@ class SemanticJobRunner:
                 on_progress=self._progress(job),
                 on_error=self._batch_error(job),
             )
+            # Batches cannot see each other, so two of them can land on one
+            # name. Checked here, where the whole model is in hand.
+            graph = _unique_entity_names(graph)
             # A model of nothing but row counts is not worth reviewing. Propose
             # real metrics for the tables that look like facts — as suggestions
             # the user keeps or deletes, never as published fact.
@@ -326,6 +329,66 @@ class SemanticJobRunner:
         await self._semantic.save_draft(graph.model_copy(update={"source_id": source_id}))
 
 
+def _unique_entity_names(graph: SemanticGraph) -> SemanticGraph:
+    """Give every entity a name no other entity has.
+
+    The heuristic names an entity after its table, so it cannot produce a
+    collision. The AI naming pass can and does: it runs in parallel batches, so
+    the batch naming `contracts` cannot know what the batch naming
+    `enterprise_contracts` chose, and "Hợp đồng doanh nghiệp" is a reasonable
+    name for either. Nothing in a prompt fixes that — seeing the whole model at
+    once is exactly what batching gives up — so the check belongs here, after
+    the batches are back, where a machine can be certain.
+
+    It matters beyond tidy lists: every entity gets a "<Entity> Count" metric,
+    so two entities with one name produce two metrics with one name, and a
+    formula naming that metric resolves to whichever the compiler saw last.
+
+    Collisions are broken by the table, which is unique by construction — unlike
+    the entity name, which is what went wrong the first time this was fixed.
+    """
+    taken: set[str] = set()
+    renames: dict[str, tuple[str, str]] = {}
+    entities: list[Entity] = []
+
+    for entity in graph.entities:
+        name = entity.name.strip()
+        if name and name in taken:
+            candidate = f"{name} — {entity.table}"
+            suffix = 2
+            while candidate in taken:
+                suffix += 1
+                candidate = f"{name} — {entity.table} ({suffix})"
+            log.info("semantic.entity.renamed", was=name, now=candidate)
+            renames[entity.key] = (name, candidate)
+            entity = entity.model_copy(update={"name": candidate})
+            name = candidate
+        taken.add(name)
+        entities.append(entity)
+
+    if not renames:
+        return graph
+
+    # A default "<Entity> Count" label has to follow its entity, or the list
+    # shows a metric named after something that is no longer called that.
+    metrics: list[MetricDefinition] = []
+    for metric in graph.metrics:
+        rename = renames.get(metric.entity_key or "")
+        if rename is not None and metric.name == f"{rename[0]} Count":
+            metrics.append(
+                metric.model_copy(
+                    update={
+                        "name": f"{rename[1]} Count",
+                        "description": f"Number of {rename[1]} records.",
+                    }
+                )
+            )
+        else:
+            metrics.append(metric)
+
+    return graph.model_copy(update={"entities": entities, "metrics": metrics})
+
+
 def _unique_metric_names(graph: SemanticGraph) -> SemanticGraph:
     """Give every metric a name no other metric has.
 
@@ -355,11 +418,13 @@ def _unique_metric_names(graph: SemanticGraph) -> SemanticGraph:
             continue
 
         entity = by_key.get(metric.entity_key or "")
-        candidate = f"{name} ({entity.name})" if entity else f"{name} (2)"
+        # By table, not by entity name: the entity name can be a duplicate
+        # itself, which is exactly how the first attempt at this failed.
+        candidate = f"{name} — {entity.table}" if entity else f"{name} — 2"
         suffix = 2
         while candidate in taken:
             suffix += 1
-            candidate = f"{name} ({suffix})"
+            candidate = f"{name} — {suffix}"
         log.info("semantic.metric.renamed", was=name, now=candidate)
         taken.add(candidate)
         renamed.append(metric.model_copy(update={"name": candidate}))
