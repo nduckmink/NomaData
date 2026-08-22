@@ -192,13 +192,16 @@ export function EditArea({
  *
  *  Was a native <select>, chosen because a Radix one seemed too heavy for a
  *  form with a dozen of them. The cost was a control that ignored the theme
- *  entirely: light popups over a dark page, a different typeface, and none of
- *  the focus and hover states everything beside it has. One component, so
- *  changing what it renders fixes every field at once.
+ *  entirely: light popups over a dark page, a different typeface, none of the
+ *  focus states everything beside it has.
  *
- *  A blank value is not a valid Radix item, so the placeholder is the trigger's
- *  own placeholder rather than an option — which also stops "None" reading like
- *  something you picked. */
+ *  "Too heavy" was right about one thing, and the relationship table proved it:
+ *  183 rows with two entity pickers each, 122 entities per picker, is 44,652
+ *  items — and a Radix item is a component with context and a ref where an
+ *  <option> was a DOM node. Building them on every render froze the page. So
+ *  the list exists only while the menu is open, and the trigger is told what to
+ *  say rather than reading it off an item that is no longer mounted.
+ */
 export function MiniSelect({
   value,
   onChange,
@@ -218,12 +221,13 @@ export function MiniSelect({
   empty?: boolean
   highlighted?: boolean
 }) {
-  const seen = new Set<string>()
-  const unique = options.filter(
-    (o) => o.value !== "" && !seen.has(o.value) && seen.add(o.value)
-  )
+  const [open, setOpen] = React.useState(false)
+  const selected = options.find((o) => o.value === value)
+
   return (
     <Select
+      open={open}
+      onOpenChange={setOpen}
       value={value || undefined}
       onValueChange={(v) => onChange(v === CLEAR ? "" : v)}
     >
@@ -237,21 +241,48 @@ export function MiniSelect({
           className
         )}
       >
-        <SelectValue placeholder={placeholder ?? "Choose…"} />
+        <SelectValue placeholder={placeholder ?? "Choose…"}>
+          {selected?.label}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
-        {/* Offered only when there is something to clear, so an optional field
-            can go back to empty without retyping the form. */}
-        {placeholder !== undefined && value !== "" && (
-          <SelectItem value={CLEAR}>{placeholder}</SelectItem>
+        {open && (
+          <MiniSelectItems
+            options={options}
+            clearable={placeholder !== undefined && value !== ""}
+            placeholder={placeholder}
+          />
         )}
-        {unique.map((o) => (
-          <SelectItem key={o.value} value={o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
       </SelectContent>
     </Select>
+  )
+}
+
+/** The items, built only while the menu is open. */
+function MiniSelectItems({
+  options,
+  clearable,
+  placeholder,
+}: {
+  options: { value: string; label: string }[]
+  clearable: boolean
+  placeholder?: string
+}) {
+  const seen = new Set<string>()
+  const unique = options.filter(
+    (o) => o.value !== "" && !seen.has(o.value) && seen.add(o.value)
+  )
+  return (
+    <>
+      {/* Offered only when there is something to clear, so an optional field
+          can go back to empty without retyping the form. */}
+      {clearable && <SelectItem value={CLEAR}>{placeholder}</SelectItem>}
+      {unique.map((o) => (
+        <SelectItem key={o.value} value={o.value}>
+          {o.label}
+        </SelectItem>
+      ))}
+    </>
   )
 }
 
