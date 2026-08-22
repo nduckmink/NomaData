@@ -53,40 +53,25 @@ export default function SemanticModelsPage() {
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const data = await getSemanticOverview(signal)
-      if (signal?.aborted) return
+      if (signal?.aborted) return []
       setRows(data)
       setStatus("ready")
+      return data
     } catch {
       if (!signal?.aborted) setStatus("error")
+      return []
     }
   }, [])
-
-  useEffect(() => {
-    const controller = new AbortController()
-    void (async () => {
-      await load(controller.signal)
-      try {
-        const cfg = await getAIConfig(controller.signal)
-        if (!controller.signal.aborted) setAiConfigured(!!cfg?.configured)
-      } catch {
-        // Leave false — a build without AI needs no business context.
-      }
-    })()
-    return () => controller.abort()
-  }, [load])
 
   const setJob = (name: string, job: GenerationJob | null) =>
     setJobs((j) => ({ ...j, [name]: job }))
 
-  // Same background job the per-source editor uses. Building a model means
-  // introspection, profiling and batched AI calls — far too slow to hold a
-  // request open, and a second click must not start a duplicate build. The live
-  // job drives the row's progress bar (done/total), like the editor's panel.
-  const handleGenerate = (name: string, tables: string[]) =>
-    void (async () => {
+  // Follow a build to its end, wherever it was started from.
+  const watch = useCallback(
+    async (name: string, initial: GenerationJob) => {
+      let job = initial
+      setJob(name, job)
       try {
-        let job = await startGenerate(name, true, { tables })
-        setJob(name, job)
         while (job.status === "running") {
           await new Promise((r) => setTimeout(r, 1500))
           const active = await getActiveJob(name)
@@ -104,6 +89,61 @@ export default function SemanticModelsPage() {
       } finally {
         setJob(name, null)
       }
+    },
+    [load]
+  )
+
+  // A build outlives the page that started it. Without asking, a source whose
+  // model is being built right now reads as "none" with a Generate button next
+  // to it — and pressing it runs a second build over the first.
+  const adoptRunning = useCallback(
+    async (sources: SemanticModelSummary[], signal?: AbortSignal) => {
+      const found = await Promise.all(
+        sources.map(async (row) => {
+          try {
+            return [
+              row.source_id,
+              await getActiveJob(row.source_id, signal),
+            ] as const
+          } catch {
+            return [row.source_id, null] as const
+          }
+        })
+      )
+      if (signal?.aborted) return
+      for (const [name, job] of found) {
+        if (job && job.status === "running") void watch(name, job)
+      }
+    },
+    [watch]
+  )
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void (async () => {
+      const sources = await load(controller.signal)
+      void adoptRunning(sources, controller.signal)
+      try {
+        const cfg = await getAIConfig(controller.signal)
+        if (!controller.signal.aborted) setAiConfigured(!!cfg?.configured)
+      } catch {
+        // Leave false — a build without AI needs no business context.
+      }
+    })()
+    return () => controller.abort()
+  }, [load, adoptRunning])
+
+  // Same background job the per-source editor uses. Building a model means
+  // introspection, profiling and batched AI calls — far too slow to hold a
+  // request open, and a second click must not start a duplicate build.
+  const handleGenerate = (name: string, tables: string[]) =>
+    void (async () => {
+      try {
+        void watch(name, await startGenerate(name, true, { tables }))
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Generate failed")
+        setJob(name, null)
+      }
     })()
 
   return (
@@ -115,7 +155,13 @@ export default function SemanticModelsPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void load()}
+            onClick={() =>
+              void (async () => {
+                // Refresh looks for builds too: this is what a person presses
+                // when a row does not match what they believe is happening.
+                void adoptRunning(await load())
+              })()
+            }
             disabled={status === "loading"}
           >
             <RiRefreshLine data-icon="inline-start" />
